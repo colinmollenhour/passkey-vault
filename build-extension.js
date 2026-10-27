@@ -123,18 +123,7 @@ async function buildForTarget(browserTarget) {
       entryPoints: ['src/content/content.ts'],
       outfile: `${distDir}/content.js`,
     });
-
-    await esbuild.build({
-      ...commonOptions,
-      entryPoints: ['src/ui/passkey-ui.ts'],
-      outfile: `${distDir}/passkey-ui.js`,
-    });
-
-    const passkeyUiJs = fs.readFileSync(`${distDir}/passkey-ui.js`, 'utf8');
-    const contentJs = fs.readFileSync(`${distDir}/content.js`, 'utf8');
-    fs.writeFileSync(`${distDir}/content.js`, passkeyUiJs + '\n' + contentJs);
-    fs.unlinkSync(`${distDir}/passkey-ui.js`);
-    console.log('  ✅ content.js (bundled with passkey-ui)');
+    console.log('  ✅ content.js');
 
     await esbuild.build({
       ...commonOptions,
@@ -149,6 +138,13 @@ async function buildForTarget(browserTarget) {
       outfile: `${distDir}/popup.js`,
     });
     console.log('  ✅ popup.js');
+
+    await esbuild.build({
+      ...commonOptions,
+      entryPoints: ['src/ui/vault-dialog-page.ts'],
+      outfile: `${distDir}/vault-dialog.js`,
+    });
+    console.log('  ✅ vault-dialog.js');
 
     await esbuild.build({
       ...commonOptions,
@@ -262,6 +258,12 @@ async function buildForTarget(browserTarget) {
   if (fs.existsSync('src/ui/popup.css')) {
     fs.copyFileSync('src/ui/popup.css', `${distDir}/popup.css`);
     console.log('  ✅ popup.css');
+  }
+
+  // The ceremony dialog: an extension page the content script frames.
+  for (const file of ['vault-dialog.html', 'vault-dialog.css']) {
+    fs.copyFileSync(path.join('src/ui', file), path.join(distDir, file));
+    console.log(`  ✅ ${file}`);
   }
 
   if (fs.existsSync('src/ui/import.html')) {

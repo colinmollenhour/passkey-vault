@@ -76,6 +76,8 @@ import { serializeClientData } from './client-data';
 import { acceptsEs256 } from '../utils/algorithms';
 import { isRpIdValidForHost } from '../utils/rp-id';
 import { hasStringId, wellFormedRecords } from '../utils/records';
+import { DIALOG_MESSAGES, isVaultDialogSender } from '../utils/vault-dialog';
+import { DialogBroker } from './dialog-broker';
 import { needsSiteIcon, saveSiteIcon, clearSiteIcons } from '../site-icons';
 import {
   selectPrfEval,
@@ -219,10 +221,12 @@ interface ExtensionMessage {
  * reads, exports, changes or deletes the vault or its settings.
  */
 const WEB_PAGE_MESSAGES = new Set([
+  DIALOG_MESSAGES.OPEN,
+  DIALOG_MESSAGES.LAUNCH,
+  DIALOG_MESSAGES.CANCEL,
   'CREATE_PASSKEY',
   'DISCARD_REGISTRATION',
   'GET_PASSKEY',
-  'LIST_PASSKEYS_FOR_RP',
   'CHECK_RP_ID',
   'NEEDS_SITE_ICON',
   'SAVE_SITE_ICON',
@@ -285,6 +289,7 @@ async function bindToWebPage(
   const payload: MessagePayload = { ...(message.payload || {}) };
 
   switch (message.type) {
+    case DIALOG_MESSAGES.OPEN:
     case 'CREATE_PASSKEY':
     case 'GET_PASSKEY': {
       const publicKey = { ...((payload.publicKey as MessagePayload) || {}) };
@@ -311,9 +316,6 @@ async function bindToWebPage(
       }
       break;
     }
-    case 'LIST_PASSKEYS_FOR_RP':
-      await requireRpIdFor(String(payload.rpId || ''), origin);
-      break;
     case 'NEEDS_SITE_ICON':
     case 'SAVE_SITE_ICON':
       // Only a page of the site itself may supply its icon.
@@ -363,6 +365,16 @@ class BackgroundService {
     string,
     { requester: string; credentialId: string; at: number }
   >();
+
+  /** The vault's ceremony dialogs, and the approvals they give. */
+  private dialogs = new DialogBroker({
+    assertUnlocked: async () => {
+      if ((await secureStorage.isSetup()) && !secureStorage.isStorageUnlocked()) {
+        throw new VaultLockedError();
+      }
+    },
+    passkeysFor: async (rpId) => (await this.loadPasskeys()).filter((p) => p.rpId === rpId),
+  });
 
   private withVault<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.vaultJobs.then(operation);
@@ -804,8 +816,22 @@ class BackgroundService {
     sender: chrome.runtime.MessageSender
   ): Promise<unknown> {
     await this.sessionRestored;
+    // The dialog page is an extension page that web pages embed, so it gets
+    // the dialog messages and nothing else an extension page could ask for.
+    if (isVaultDialogSender(sender, chrome.runtime.id)) {
+      return this.dialogs.handleDialogMessage(received as unknown as MessagePayload, sender);
+    }
     const message = isExtensionPage(sender) ? received : await bindToWebPage(received, sender);
     const { type } = message;
+    if (type === DIALOG_MESSAGES.OPEN) {
+      return this.dialogs.open(message, sender);
+    }
+    if (type === DIALOG_MESSAGES.LAUNCH) {
+      return this.dialogs.launch(message);
+    }
+    if (type === DIALOG_MESSAGES.CANCEL) {
+      return this.dialogs.cancel(message);
+    }
 
     const lockedTypes = new Set([
       'CREATE_PASSKEY',
@@ -814,7 +840,6 @@ class BackgroundService {
       'RETRIEVE_PASSKEY',
       'LIST_PASSKEYS',
       'GET_PASSKEYS',
-      'LIST_PASSKEYS_FOR_RP',
       'DELETE_PASSKEY',
       'SET_PASSKEY_BACKUP',
       'ENCRYPT_BACKUP',
@@ -853,6 +878,16 @@ class BackgroundService {
     }
     if (upgradeBlockedTypes.has(type) && (await this.isUpgradeBackupRequired())) {
       throw new Error('Export an encrypted backup before changing this upgraded vault.');
+    }
+    // A web page signs only with the passkey the user picked in the vault's
+    // dialog, and creates one only when the user confirmed it there, for
+    // the request they approved.
+    if (message.requester && type === 'GET_PASSKEY') {
+      const selectedPasskeyId = await this.dialogs.consumeApproval(message, 'get');
+      message.payload = { ...message.payload, selectedPasskeyId };
+    }
+    if (message.requester && type === 'CREATE_PASSKEY') {
+      await this.dialogs.consumeApproval(message, 'create');
     }
 
     // Serialize read/modify/write operations. Lookups and relay waits stay independent.
@@ -895,8 +930,6 @@ class BackgroundService {
       case 'LIST_PASSKEYS':
       case 'GET_PASSKEYS':
         return this.handleListPasskeys();
-      case 'LIST_PASSKEYS_FOR_RP':
-        return this.handleListPasskeysForRp(payload || {});
       case 'CHECK_RP_ID':
         return this.handleCheckRpId(payload || {});
       case 'NEEDS_SITE_ICON':
@@ -1454,39 +1487,11 @@ class BackgroundService {
     }
   }
 
-  private async handleListPasskeysForRp(payload: MessagePayload): Promise<unknown> {
-    try {
-      const rpId = payload.rpId as string | undefined;
-      if (!rpId) return { success: false, error: 'No rpId provided' };
-
-      const passkeys = await this.loadPasskeys();
-      const matchingPasskeys = passkeys.filter((p) => p.rpId === rpId);
-
-      logger.debug('Found', matchingPasskeys.length, 'passkeys for', rpId);
-      return {
-        success: true,
-        passkeys: matchingPasskeys.map((p) => ({
-          id: p.id,
-          credentialId: p.credentialId || p.id,
-          rpId: p.rpId,
-          origin: p.origin,
-          user: p.user,
-          createdAt: p.createdAt,
-        })),
-        count: matchingPasskeys.length,
-        rpId,
-      };
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      const code = error instanceof VaultLockedError ? error.code : undefined;
-      return { success: false, error: message, ...(code && { code }) };
-    }
-  }
-
   /**
    * Whether the requesting page may use an RP ID: the content script asks
    * before it offers the vault, and leaves the request to the browser when
-   * the answer is no. CREATE_PASSKEY and LIST_PASSKEYS_FOR_RP check again.
+   * the answer is no. PASSKEY_DIALOG_OPEN, CREATE_PASSKEY and GET_PASSKEY
+   * check again.
    */
   private async handleCheckRpId(payload: MessagePayload): Promise<unknown> {
     const rpId = typeof payload.rpId === 'string' ? payload.rpId : '';
