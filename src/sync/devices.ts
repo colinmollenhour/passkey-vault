@@ -43,6 +43,16 @@ function update<T>(change: (list: SyncDeviceList | null) => Promise<T> | T): Pro
   return result;
 }
 
+/**
+ * Run `change` in the list's queue, for a caller that writes the list in one
+ * storage write with other keys (the move to a v5 chain ID).
+ */
+export function updateDeviceList<T>(
+  change: (list: SyncDeviceList | null) => Promise<T> | T
+): Promise<T> {
+  return update(change);
+}
+
 async function save(list: SyncDeviceList): Promise<void> {
   await chrome.storage.local.set({ [SYNC_DEVICES_KEY]: list });
 }

@@ -72,7 +72,7 @@ import {
   type BackupRepair,
 } from '../sync/backup-flags';
 import { verifyRelatedOrigin } from './related-origins';
-import { removeDevice } from '../sync/devices';
+import { removeDevice, updateDeviceList } from '../sync/devices';
 import {
   appendWebAuthnLog,
   clearWebAuthnLog,
@@ -804,23 +804,22 @@ class BackgroundService {
    * unlock, which rewrites it from raw (reconcileSecureStorageFromRaw).
    */
   private async adoptSyncChainId(chainId: string, legacyChainId: string): Promise<void> {
-    const config = (await chrome.storage.local.get(SYNC_CONFIG_KEY))[SYNC_CONFIG_KEY] as
-      | SyncConfig
-      | undefined;
-    const chain = (await chrome.storage.local.get(SYNC_DEVICES_KEY))[SYNC_DEVICES_KEY] as
-      | SyncChain
-      | null
-      | undefined;
-    const writes: Record<string, unknown> = {};
-    if (config?.chainId === legacyChainId) writes[SYNC_CONFIG_KEY] = { ...config, chainId };
-    if (chain?.id === legacyChainId) writes[SYNC_DEVICES_KEY] = { ...chain, id: chainId };
+    // In the device list's queue, so a sighting saved meanwhile is not lost.
+    await updateDeviceList(async (chain) => {
+      const config = (await chrome.storage.local.get(SYNC_CONFIG_KEY))[SYNC_CONFIG_KEY] as
+        | SyncConfig
+        | undefined;
+      const writes: Record<string, unknown> = {};
+      if (config?.chainId === legacyChainId) writes[SYNC_CONFIG_KEY] = { ...config, chainId };
+      if (chain?.id === legacyChainId) writes[SYNC_DEVICES_KEY] = { ...chain, id: chainId };
 
-    const stored = secureStorage.isStorageUnlocked() ? await secureStorage.getSyncConfig() : null;
-    if (stored?.chainId === legacyChainId) {
-      await secureStorage.storeSyncConfig({ ...stored, chainId }, writes);
-    } else if (Object.keys(writes).length > 0) {
-      await chrome.storage.local.set(writes);
-    }
+      const stored = secureStorage.isStorageUnlocked() ? await secureStorage.getSyncConfig() : null;
+      if (stored?.chainId === legacyChainId) {
+        await secureStorage.storeSyncConfig({ ...stored, chainId }, writes);
+      } else if (Object.keys(writes).length > 0) {
+        await chrome.storage.local.set(writes);
+      }
+    });
     logger.info('Moved sync to the v5 chain ID');
   }
 

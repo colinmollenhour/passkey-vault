@@ -396,6 +396,18 @@ describe('moving a PIN-protected chain to its v5 chain ID', () => {
     expect(storage.sync_config).toEqual({ ...chainA, chainId: v5 });
   });
 
+  it('keeps a device sighting recorded while the move is writing', async () => {
+    const { devices, adapter } = await unlockedOnChainA();
+
+    const moved = adapter.saveChainId(v5, chainA.chainId as string);
+    const sighted = devices.recordDeviceSighting({ deviceId: 'phone', timestamp: 2 }, 'device-a');
+    await Promise.all([moved, sighted]);
+
+    const list = storage.sync_devices as { id: string; devices: { id: string }[] };
+    expect(list.id).toBe(v5);
+    expect(list.devices.map((device) => device.id)).toEqual(['phone']);
+  });
+
   it('leaves copies that hold another chain alone', async () => {
     const { secure, adapter } = await unlockedOnChainA();
     storage.sync_devices = { id: 'b'.repeat(32), createdAt: 1, devices: [] };

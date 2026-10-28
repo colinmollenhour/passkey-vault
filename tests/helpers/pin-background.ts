@@ -48,6 +48,7 @@ export async function loadBackground(): Promise<{
   send: Respond;
   secure: SecureStorageModule['secureStorage'];
   sync: SyncServiceModule['syncService'];
+  devices: typeof import('../../src/sync/devices');
 }> {
   const runtime = chrome.runtime as unknown as Record<string, unknown>;
   const listeners: Array<(m: unknown, s: unknown, r: (v: unknown) => void) => void> = [];
@@ -58,18 +59,20 @@ export async function loadBackground(): Promise<{
 
   let secure!: SecureStorageModule['secureStorage'];
   let sync!: SyncServiceModule['syncService'];
+  let devices!: typeof import('../../src/sync/devices');
   await jest.isolateModulesAsync(async () => {
     await import('../../src/background/background');
     secure = (await import('../../src/crypto/secure-storage')).secureStorage;
     sync = ((await import('../../src/sync/sync-service')) as unknown as SyncServiceModule)
       .syncService;
+    devices = await import('../../src/sync/devices');
   });
 
   // Chrome's account of a message from the popup, an extension page.
   const popup = { id: chrome.runtime.id, url: chrome.runtime.getURL('popup.html') };
   const send: Respond = (message) =>
     new Promise((resolve) => listeners[0](message, popup, (v) => resolve(v as Reply)));
-  return { send, secure, sync };
+  return { send, secure, sync, devices };
 }
 
 /** Lock, then report whether the given PIN unlocks the vault. */
