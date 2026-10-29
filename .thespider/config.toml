@@ -1,0 +1,9 @@
+server = "https://thespider.xyz"
+project = "colin-forks/fenko-vault"
+profile = "bugs"
+
+[[model]]
+code = "anthropic/claude-opus-5-5"
+agent = "claude"
+effort = "high"
+timeout_seconds = 900
