@@ -98,7 +98,7 @@ export const DIALOG_MESSAGES = {
   RESULT: 'PASSKEY_DIALOG_RESULT',
   /** Background to the top frame's content script: its device pixel ratio. */
   TOP_METRICS: 'PASSKEY_VAULT_TOP_METRICS',
-  /** Background to the top frame's content script: a site was turned off. */
+  /** Background to the requesting page's content script, or its top frame's: a site was turned off. */
   SITE_EXCLUDED: 'PASSKEY_VAULT_SITE_EXCLUDED',
 } as const;
 

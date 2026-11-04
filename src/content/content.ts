@@ -143,9 +143,10 @@ class ContentScript {
    * arbitrary origin/rpId. The content script runs in the isolated world, so
    * `window.location.origin` is the authoritative caller origin. We overwrite
    * the payload origin with it. Whether the RP ID fits that origin is asked of
-   * the background (mayUseRpId) once the domain rules say the vault handles
-   * the site, so a site the user excluded never causes a Related Origin
-   * Request fetch.
+   * the background (mayUseRpId) before the user's site lists are read, so the
+   * answer does not reveal them (see interception()). For a cross-site RP ID
+   * that can mean a Related Origin Request fetch for a site on those lists;
+   * the browser makes the same fetch when the request reaches it.
    */
   private async resolveTrustedRpId(payload: Record<string, unknown>): Promise<RpIdResolution> {
     // WebAuthn is restricted to secure contexts.  The content script also
@@ -884,8 +885,8 @@ class ContentScript {
   /**
    * The user turned the vault off for this site in its dialog; the
    * background has saved that. Hand this request to the browser like every
-   * later one for the site. The background tells the top frame to show the
-   * notice (siteExcludedNotice), whichever way this request ends.
+   * later one for the site. The background asks for the notice separately
+   * (siteExcludedNotice), whichever way this request ends.
    */
   private siteExcluded(type: string, requestId: string): void {
     this.postPassthroughResponse(type, requestId, 'Site excluded');
