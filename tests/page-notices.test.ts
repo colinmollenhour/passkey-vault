@@ -5,7 +5,11 @@
  */
 
 import { initI18n } from '../src/i18n';
-import { showErrorNotification, showPasskeyUsedNotification } from '../src/content/page-notices';
+import {
+  showErrorNotification,
+  showInfoNotification,
+  showPasskeyUsedNotification,
+} from '../src/content/page-notices';
 
 const chromeMock = (window as unknown as { chrome: Record<string, any> }).chrome;
 chromeMock.storage.local.get.mockResolvedValue({ ui_theme: 'dark', ui_language: 'fa' });
@@ -41,6 +45,23 @@ it('shows a notice in a closed shadow root, themed without marking the page', as
   expect(roots[0].textContent).toContain('Something went wrong');
   expect(host.getAttribute('data-theme')).toBe('dark');
   expect(document.documentElement.getAttributeNames()).toEqual([]);
+});
+
+it('shows neutral information as a status, not an alert', async () => {
+  showInfoNotification(
+    'Turned Off Here',
+    "Fenko Vault won't save or offer passkeys on bank.example. Turn it back on in Settings."
+  );
+  await flush();
+
+  const toast = roots[roots.length - 1].querySelector('.toast')!;
+  expect(toast.classList.contains('info')).toBe(true);
+  expect(toast.getAttribute('role')).toBe('status');
+  expect(toast.textContent).toContain('Turned Off Here');
+  expect(toast.textContent).toContain('passkeys on bank.example');
+  expect(roots[roots.length - 1].querySelector('style')!.textContent).toContain('.info {');
+  // One notice at a time: it replaced the error.
+  expect(document.documentElement.querySelectorAll(':scope > div')).toHaveLength(1);
 });
 
 it('names the site, not the account, after a sign-in', async () => {

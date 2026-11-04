@@ -10,17 +10,24 @@ import { logger } from '../utils/logger';
 import { readPageIcon } from '../site-icons/page-capture';
 import { describeFrame } from './frame';
 import { acceptsEs256 } from '../utils/algorithms';
+import {
+  isExcludedSite,
+  loadInterceptionSettings,
+  modeIntercepts,
+  type DomainRules,
+} from '../utils/domain-rules';
 import { VaultDialogClient } from './vault-dialog-client';
+import { DIALOG_MESSAGES } from '../utils/vault-dialog';
 import {
   showErrorNotification as _showErrorNotification,
+  showInfoNotification as _showInfoNotification,
   showPasskeyCreatedNotification as _showPasskeyCreatedNotification,
   showPasskeyUsedNotification as _showPasskeyUsedNotification,
 } from './page-notices';
 
-interface DomainRules {
-  mode: 'disabled' | 'all' | 'allowlist' | 'blocklist';
-  domains: string[];
-  passthroughOnNoPasskey?: boolean;
+/** A dialog outcome the code does not handle is a type error here. */
+function assertNever(value: never): never {
+  throw new Error(`Unexpected dialog outcome: ${String(value)}`);
 }
 
 /**
@@ -136,9 +143,10 @@ class ContentScript {
    * arbitrary origin/rpId. The content script runs in the isolated world, so
    * `window.location.origin` is the authoritative caller origin. We overwrite
    * the payload origin with it. Whether the RP ID fits that origin is asked of
-   * the background (mayUseRpId) once the domain rules say the vault handles
-   * the site, so a site the user excluded never causes a Related Origin
-   * Request fetch.
+   * the background (mayUseRpId) before the user's site lists are read, so the
+   * answer does not reveal them (see interception()). For a cross-site RP ID
+   * that can mean a Related Origin Request fetch for a site on those lists;
+   * the browser makes the same fetch when the request reaches it.
    */
   private async resolveTrustedRpId(payload: Record<string, unknown>): Promise<RpIdResolution> {
     // WebAuthn is restricted to secure contexts.  The content script also
@@ -230,6 +238,28 @@ class ContentScript {
   }
 
   /**
+   * The domain rules, and why the vault leaves a request for `rpId` to the
+   * browser (null when it handles it).
+   *
+   * SECURITY: the page names the RP ID, any RP ID, and reads the reason.
+   * So the user's site lists (the allow or block list, and the sites
+   * turned off from the dialog) are checked only after the RP ID check: a
+   * page asking about another site's RP ID gets "not valid here", and the
+   * same round trip to the background, whatever the lists say about that
+   * site. Checked first, the answer would tell the page what is on them.
+   */
+  private async interception(rpId: string): Promise<{ rules: DomainRules; skip: string | null }> {
+    const { rules, excluded } = await loadInterceptionSettings();
+    let skip: string | null = null;
+    if (rules.mode === 'disabled') skip = 'Domain not intercepted';
+    else if (!(await this.mayUseRpId(rpId))) skip = 'RP ID not valid here';
+    else if (!modeIntercepts(rpId, rules) || isExcludedSite(rpId, excluded)) {
+      skip = 'Domain not intercepted';
+    }
+    return { rules, skip };
+  }
+
+  /**
    * Handle messages from the page script.
    *
    * The page cancels a request when it times out or the site aborts it.
@@ -287,22 +317,9 @@ class ContentScript {
           return;
         }
         const rpId = resolved.rpId;
-        const rules = await this.getDomainRules();
-
-        if (!this.shouldInterceptDomain(rpId, rules)) {
-          this.postPassthroughResponse(
-            'PASSKEY_CREATE_RESPONSE',
-            requestId,
-            'Domain not intercepted'
-          );
-          return;
-        }
-        if (!(await this.mayUseRpId(rpId))) {
-          this.postPassthroughResponse(
-            'PASSKEY_CREATE_RESPONSE',
-            requestId,
-            'RP ID not valid here'
-          );
+        const { skip } = await this.interception(rpId);
+        if (skip) {
+          this.postPassthroughResponse('PASSKEY_CREATE_RESPONSE', requestId, skip);
           return;
         }
 
@@ -336,22 +353,43 @@ class ContentScript {
         if (dialog.status !== 'decided') {
           throw new Error(t('pagePasskeyError'));
         }
-        if (dialog.outcome !== 'approved') {
-          window.postMessage(
-            {
-              source: 'PASSKEY_VAULT_CONTENT',
-              type: 'PASSKEY_CREATE_RESPONSE',
+        switch (dialog.outcome) {
+          case 'approved':
+            break;
+          case 'passthrough':
+            // "Use another device": the browser's own dialog, with the
+            // page's options, for a security key or a phone. The session
+            // is gone, so no approval is left for this request.
+            this.postPassthroughResponse(
+              'PASSKEY_CREATE_RESPONSE',
               requestId,
-              result: {
-                success: false,
-                error: t('commonCancel'),
-                name: 'NotAllowedError',
-                blockNativeFallback: true,
+              'User chose another device'
+            );
+            return;
+          case 'excluded':
+            this.siteExcluded('PASSKEY_CREATE_RESPONSE', requestId);
+            return;
+          // The client never returns "escalated" (it keeps waiting for the
+          // window); were it to, it would be a cancel.
+          case 'cancel':
+          case 'escalated':
+            window.postMessage(
+              {
+                source: 'PASSKEY_VAULT_CONTENT',
+                type: 'PASSKEY_CREATE_RESPONSE',
+                requestId,
+                result: {
+                  success: false,
+                  error: t('commonCancel'),
+                  name: 'NotAllowedError',
+                  blockNativeFallback: true,
+                },
               },
-            },
-            '*'
-          );
-          return;
+              '*'
+            );
+            return;
+          default:
+            return assertNever(dialog.outcome);
         }
 
         const response = await this.sendMessage({
@@ -440,14 +478,9 @@ class ContentScript {
           return;
         }
         const rpId = resolved.rpId;
-        const rules = await this.getDomainRules();
-
-        if (!this.shouldInterceptDomain(rpId, rules)) {
-          this.postPassthroughResponse('PASSKEY_GET_RESPONSE', requestId, 'Domain not intercepted');
-          return;
-        }
-        if (!(await this.mayUseRpId(rpId))) {
-          this.postPassthroughResponse('PASSKEY_GET_RESPONSE', requestId, 'RP ID not valid here');
+        const { rules, skip } = await this.interception(rpId);
+        if (skip) {
+          this.postPassthroughResponse('PASSKEY_GET_RESPONSE', requestId, skip);
           return;
         }
 
@@ -499,42 +532,51 @@ class ContentScript {
           return;
         }
 
-        if (dialog.outcome === 'passthrough') {
-          this.postPassthroughResponse(
-            'PASSKEY_GET_RESPONSE',
-            requestId,
-            'User chose other passkey'
-          );
-          return;
-        }
-
-        if (dialog.outcome === 'cancel') {
-          // A conditional (autofill) request is meant to stay open for the
-          // life of the page, so dismissing the picker hands it to the
-          // browser's own autofill instead of failing it.
-          if (payload.mediation === 'conditional') {
+        switch (dialog.outcome) {
+          case 'approved':
+            break;
+          case 'passthrough':
             this.postPassthroughResponse(
               'PASSKEY_GET_RESPONSE',
               requestId,
-              'Vault picker dismissed'
+              'User chose other passkey'
             );
             return;
-          }
-          window.postMessage(
-            {
-              source: 'PASSKEY_VAULT_CONTENT',
-              type: 'PASSKEY_GET_RESPONSE',
-              requestId,
-              result: {
-                success: false,
-                error: t('commonCancel'),
-                name: 'NotAllowedError',
-                blockNativeFallback: true,
+          case 'excluded':
+            this.siteExcluded('PASSKEY_GET_RESPONSE', requestId);
+            return;
+          // The client never returns "escalated" (it keeps waiting for the
+          // window); were it to, it would be a cancel.
+          case 'cancel':
+          case 'escalated':
+            // A conditional (autofill) request is meant to stay open for the
+            // life of the page, so dismissing the picker hands it to the
+            // browser's own autofill instead of failing it.
+            if (payload.mediation === 'conditional') {
+              this.postPassthroughResponse(
+                'PASSKEY_GET_RESPONSE',
+                requestId,
+                'Vault picker dismissed'
+              );
+              return;
+            }
+            window.postMessage(
+              {
+                source: 'PASSKEY_VAULT_CONTENT',
+                type: 'PASSKEY_GET_RESPONSE',
+                requestId,
+                result: {
+                  success: false,
+                  error: t('commonCancel'),
+                  name: 'NotAllowedError',
+                  blockNativeFallback: true,
+                },
               },
-            },
-            '*'
-          );
-          return;
+              '*'
+            );
+            return;
+          default:
+            return assertNever(dialog.outcome);
         }
 
         userChosePasskey = true;
@@ -620,9 +662,15 @@ class ContentScript {
    */
   private setupBackgroundCommunication(): void {
     // Listen for messages from background script
-    // Nothing here answers, so the channel is not held open: a sender that
-    // waits for a reply would otherwise wait until the page unloads.
-    chrome.runtime.onMessage.addListener((message) => {
+    // Answers come back synchronously, so the channel is never held open: a
+    // sender that waits for a reply would otherwise wait until the page
+    // unloads.
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender?.id !== chrome.runtime.id) return;
+      if (message?.type === DIALOG_MESSAGES.SITE_EXCLUDED) {
+        sendResponse({ shown: this.siteExcludedNotice(message.rpId, message.origin) });
+        return;
+      }
       this.handleBackgroundMessage(message);
     });
   }
@@ -834,28 +882,31 @@ class ContentScript {
     };
   }
 
-  private async getDomainRules(): Promise<DomainRules> {
-    const result = await chrome.storage.local.get('domain_rules');
-    const partial = (result.domain_rules || {}) as Partial<DomainRules>;
-    return {
-      mode: partial.mode || 'all',
-      domains: Array.isArray(partial.domains) ? partial.domains : [],
-      passthroughOnNoPasskey: partial.passthroughOnNoPasskey !== false,
-    };
+  /**
+   * The user turned the vault off for this site in its dialog; the
+   * background has saved that. Hand this request to the browser like every
+   * later one for the site. The background asks for the notice separately
+   * (siteExcludedNotice), whichever way this request ends.
+   */
+  private siteExcluded(type: string, requestId: string): void {
+    this.postPassthroughResponse(type, requestId, 'Site excluded');
   }
 
-  private shouldInterceptDomain(rpId: string, rules: DomainRules): boolean {
-    if (rules.mode === 'disabled') return false;
-    if (rules.mode === 'all') return true;
-
-    const domain = rpId.toLowerCase();
-    const matches = rules.domains.some((rule) => {
-      const normalizedRule = rule.toLowerCase();
-      return domain === normalizedRule || domain.endsWith(`.${normalizedRule}`);
-    });
-
-    if (rules.mode === 'allowlist') return matches;
-    if (rules.mode === 'blocklist') return !matches;
+  /**
+   * Say the vault is off for `rpId` and where to turn it back on, if this
+   * page is the one that asked or a page of the same site. The background
+   * sends it to the top frame first, since an embedded frame may be too
+   * small to show it, then to the requesting frame if the top page is
+   * another site's: an embedder, or a page the tab navigated to meanwhile,
+   * learns nothing. The notice is text only: it is page DOM, where a
+   * control would be one the page could click.
+   */
+  private siteExcludedNotice(rpId: unknown, origin: unknown): boolean {
+    if (typeof rpId !== 'string' || !rpId || typeof origin !== 'string') return false;
+    const host = window.location.hostname;
+    const ours = window.location.origin === origin || host === rpId || host.endsWith(`.${rpId}`);
+    if (!ours) return false;
+    _showInfoNotification(t('pageSiteExcludedTitle'), t('pageSiteExcludedMsg', { rp: rpId }));
     return true;
   }
 

@@ -85,6 +85,7 @@ import { isRpIdValidForHost } from '../utils/rp-id';
 import { hasStringId, wellFormedRecords } from '../utils/records';
 import { DIALOG_MESSAGES, isVaultDialogSender } from '../utils/vault-dialog';
 import { DialogBroker } from './dialog-broker';
+import { ExcludedSites } from './excluded-sites';
 import { needsSiteIcon, saveSiteIcon, clearSiteIcons } from '../site-icons';
 import {
   selectPrfEval,
@@ -373,6 +374,9 @@ class BackgroundService {
     { requester: string; credentialId: string; at: number }
   >();
 
+  /** Sites the user turned the vault off for; the only writer of that list. */
+  private excludedSites = new ExcludedSites();
+
   /** The vault's ceremony dialogs, and the approvals they give. */
   private dialogs = new DialogBroker({
     assertUnlocked: async () => {
@@ -381,6 +385,11 @@ class BackgroundService {
       }
     },
     passkeysFor: async (rpId) => (await this.loadPasskeys()).filter((p) => p.rpId === rpId),
+    // The broker passes the RP ID of the session the dialog decided on, never
+    // one named by the dialog, the page or its content script.
+    excludeSite: async (rpId) => {
+      await this.excludedSites.add(rpId);
+    },
   });
 
   private withVault<T>(operation: () => Promise<T>): Promise<T> {
@@ -1059,6 +1068,8 @@ class BackgroundService {
         return this.handleGetWebAuthnLog();
       case 'CLEAR_WEBAUTHN_LOG':
         return this.handleClearWebAuthnLog();
+      case 'EXCLUDED_SITES_REMOVE':
+        return this.handleRemoveExcludedSite(payload || {});
       default:
         throw new Error(`Unknown message type: ${type}`);
     }
@@ -2637,6 +2648,22 @@ class BackgroundService {
     try {
       await clearWebAuthnLog();
       return { success: true };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { success: false, error: message };
+    }
+  }
+
+  /**
+   * Turn the vault back on for a site, from Settings. Only extension pages
+   * get here: it is not a web page message, and the dialog page's messages
+   * go to the dialog broker. Works while the vault is locked, like the
+   * dialog control that added the site.
+   */
+  private async handleRemoveExcludedSite(payload: MessagePayload): Promise<unknown> {
+    try {
+      const rpId = typeof payload.rpId === 'string' ? payload.rpId : '';
+      return { success: true, sites: await this.excludedSites.remove(rpId) };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       return { success: false, error: message };

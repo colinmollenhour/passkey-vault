@@ -102,8 +102,16 @@ describe('the dialog frame', () => {
     const style = roots[0].querySelector('style')!.textContent!;
 
     expect(style).toContain('min(340px');
-    expect(style).toContain('min(372px');
+    expect(style).toContain('min(398px');
     expect(style).toMatch(/all: initial !important/);
+  });
+
+  it('has one size for every create confirmation', () => {
+    mountDialogFrame({ token: 'a', kind: 'create', focus: false });
+    const style = roots[0].querySelector('style')!.textContent!;
+
+    expect(style).toContain('min(340px');
+    expect(style).toContain('min(320px');
   });
 });
 
@@ -145,6 +153,14 @@ describe('where the dialog can be a frame', () => {
 });
 
 describe('the autofill launcher', () => {
+  it('offers no way to turn the vault off: it is page DOM, where any click is the page’s', () => {
+    const launcher = showLauncher('example.com', 'light');
+
+    expect(Array.from(roots[0].querySelectorAll('button'))).toHaveLength(3);
+    expect(roots[0].textContent).not.toMatch(/turn off/i);
+    launcher.remove();
+  });
+
   it('names only the site, and answers only the user’s own click', async () => {
     const launcher = showLauncher('example.com', 'light');
     let choice: string | undefined;

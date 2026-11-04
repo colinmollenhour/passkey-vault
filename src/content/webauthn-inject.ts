@@ -226,6 +226,10 @@
 
       const publicKey = convertRequestOptions(options.publicKey);
       const mediation = options.mediation === undefined ? undefined : `${options.mediation}`;
+      // Set once the request went to the browser's own prompt: its failure
+      // (the user dismissed that prompt) is the answer, not a reason to
+      // show the same prompt again.
+      let handedToBrowser = false;
 
       try {
         return await new Promise((resolve, reject) => {
@@ -235,7 +239,12 @@
             {
               resolve,
               reject,
-              nativeFallback: nativeGet ? () => nativeGet(options) : undefined,
+              nativeFallback: nativeGet
+                ? () => {
+                    handedToBrowser = true;
+                    return nativeGet(options);
+                  }
+                : undefined,
             },
             options.signal,
             ceremonyTimeout(publicKey.timeout, mediation === 'conditional')
@@ -267,7 +276,7 @@
           (e as { __passkeyVaultBlockNativeFallback?: boolean }).__passkeyVaultBlockNativeFallback
         );
         // A page that aborted its request wants no prompt at all.
-        if (blocksNativeFallback || options.signal?.aborted || !nativeGet) {
+        if (blocksNativeFallback || handedToBrowser || options.signal?.aborted || !nativeGet) {
           throw e;
         }
 

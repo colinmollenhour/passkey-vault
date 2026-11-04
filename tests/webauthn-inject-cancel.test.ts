@@ -2,7 +2,8 @@
  * When the page stops waiting for a vault request (the shim's timeout, or
  * the site aborting through options.signal), the shim must tell the content
  * script to cancel. Otherwise its dialog stays up, and a late click creates
- * or signs with a passkey nobody receives.
+ * or signs with a passkey nobody receives. And a request the vault hands
+ * to the browser's own prompt reaches that prompt once.
  */
 
 // A module, not a global script: other test files declare the same top-level
@@ -10,6 +11,7 @@
 export {};
 
 const nativeGet = navigator.credentials.get as jest.Mock;
+const nativeCreate = navigator.credentials.create as jest.Mock;
 
 // Side-effect import: hooks navigator.credentials and listens for messages.
 require('../src/content/webauthn-inject');
@@ -110,5 +112,65 @@ describe('webauthn-inject cancellation', () => {
 
     expect(outcome.name).toBe('AbortError');
     expect(posted).toEqual([]);
+  });
+});
+
+describe('webauthn-inject handing a request to the browser', () => {
+  beforeEach(() => nativeCreate.mockReset());
+
+  /** Answer the shim's request as the content script does. */
+  function answer(result: Record<string, unknown>): void {
+    const [request] = posted;
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { source: 'PASSKEY_VAULT_CONTENT', requestId: request.requestId, result },
+        source: window,
+      })
+    );
+  }
+
+  const passthrough = {
+    success: false,
+    passthrough: true,
+    error: 'User chose other passkey',
+    name: 'NotAllowedError',
+  };
+
+  it('does not open the browser’s prompt a second time when the user dismisses it', async () => {
+    const dismissed = new DOMException('The user dismissed the prompt.', 'NotAllowedError');
+    nativeGet.mockRejectedValue(dismissed);
+    const outcome = navigator.credentials.get(getOptions()).catch((error) => error);
+    await flush();
+
+    answer(passthrough);
+
+    expect(await outcome).toBe(dismissed);
+    expect(nativeGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('still tries the browser once when the vault fails without blocking it', async () => {
+    nativeGet.mockResolvedValue({ id: 'native' });
+    const outcome = navigator.credentials.get(getOptions());
+    await flush();
+
+    answer({ success: false, error: 'No passkey', name: 'NotAllowedError' });
+
+    expect(await outcome).toEqual({ id: 'native' });
+    expect(nativeGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives a create to the browser with the page’s own options, once', async () => {
+    const dismissed = new DOMException('The user dismissed the prompt.', 'NotAllowedError');
+    nativeCreate.mockRejectedValue(dismissed);
+    const controller = new AbortController();
+    const options = createOptions(controller.signal);
+    const outcome = navigator.credentials.create(options).catch((error) => error);
+    await flush();
+
+    answer({ ...passthrough, error: 'User chose another device' });
+
+    expect(await outcome).toBe(dismissed);
+    expect(nativeCreate).toHaveBeenCalledTimes(1);
+    expect(nativeCreate.mock.calls[0][0]).toBe(options);
   });
 });

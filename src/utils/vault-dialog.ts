@@ -25,6 +25,18 @@
  *
  * In a window, the background opens the dialog page with the token in its
  * URL; the page that asked has no handle on that window.
+ *
+ * Besides answering, the user can hand a request back to the browser. The
+ * code uses two words for that, and never "disabled", which is the
+ * interception mode that turns the vault off everywhere:
+ *
+ *   passthrough   this one request goes to the browser's own WebAuthn UI
+ *                 ("Use another device" when creating, "Use other passkey"
+ *                 when signing in), for a security key or a phone
+ *   exclude       the vault stays out of this RP ID from now on ("Turn off
+ *                 on {rp}"); the background records it in excluded_sites
+ *                 (see src/utils/domain-rules.ts), and this request also
+ *                 goes to the browser
  */
 
 export const VAULT_DIALOG_PAGE = 'vault-dialog.html';
@@ -38,9 +50,10 @@ export type VaultDialogMode = 'frame' | 'window';
  * What the content script learns: whether to go on with the ceremony. It
  * never learns which passkey the user picked; the background keeps that.
  * "escalated": the framed dialog moved to a window; take the frame down
- * and keep waiting.
+ * and keep waiting. "excluded": the site is now excluded, so hand the
+ * request to the browser.
  */
-export type VaultDialogOutcome = 'approved' | 'cancel' | 'passthrough' | 'escalated';
+export type VaultDialogOutcome = 'approved' | 'cancel' | 'passthrough' | 'excluded' | 'escalated';
 
 export interface VaultDialogPasskey {
   id: string;
@@ -52,11 +65,19 @@ export type VaultDialogView =
   | { kind: 'get'; mode: VaultDialogMode; rpId: string; passkeys: VaultDialogPasskey[] }
   | { kind: 'create'; mode: VaultDialogMode; rpId: string; userName: string };
 
+/**
+ * "exclude-site" names no site: the background excludes the RP ID of the
+ * session it bound to the requesting frame, whatever a message says.
+ */
 export type VaultDialogDecision =
   | { action: 'use'; id: string }
   | { action: 'create' }
   | { action: 'cancel' }
-  | { action: 'passthrough' };
+  | { action: 'passthrough' }
+  | { action: 'exclude-site' };
+
+/** The DECIDE answer when the exclusion could not be saved; the dialog stays open. */
+export const EXCLUDE_FAILED = 'EXCLUDE_FAILED';
 
 export const DIALOG_MESSAGES = {
   /** Content script: open a dialog for one of its requests. */
@@ -77,6 +98,8 @@ export const DIALOG_MESSAGES = {
   RESULT: 'PASSKEY_DIALOG_RESULT',
   /** Background to the top frame's content script: its device pixel ratio. */
   TOP_METRICS: 'PASSKEY_VAULT_TOP_METRICS',
+  /** Background to the requesting page's content script, or its top frame's: a site was turned off. */
+  SITE_EXCLUDED: 'PASSKEY_VAULT_SITE_EXCLUDED',
 } as const;
 
 /** The postMessage that hands a framed dialog its token. */
@@ -85,20 +108,28 @@ export const DIALOG_TOKEN_MESSAGE = 'fenko-vault-dialog-token';
 /**
  * Fixed frame sizes. The picker's does not depend on how many passkeys it
  * lists: the page can measure the frame's host, and must not learn the
- * number of accounts from it.
+ * number of accounts from it. The heights are the measured layout: the
+ * header with a two-line message, the status row, the body (two passkeys
+ * and part of a third, or the new passkey's account), and the footer with
+ * its first row on two lines, as the longer translations need, and the
+ * "Turn off" row.
  */
 export const DIALOG_FRAME_SIZE: Record<VaultDialogKind, { width: number; height: number }> = {
-  get: { width: 340, height: 372 },
-  create: { width: 340, height: 232 },
+  get: { width: 340, height: 398 },
+  create: { width: 340, height: 320 },
 };
 
 /** How long the dialog must have been fully visible before a click counts. */
 export const CONSENT_DWELL_MS = 500;
 
-/** Outer size of the popup window: the frame, plus room for the title bar. */
+/**
+ * Outer size of the popup window: the frame, plus room for the title bar.
+ * A window has no status row, so the same footer leaves its body a little
+ * more room than the frame's.
+ */
 export const DIALOG_WINDOW_SIZE: Record<VaultDialogKind, { width: number; height: number }> = {
-  get: { width: 380, height: 440 },
-  create: { width: 380, height: 300 },
+  get: { width: 380, height: 466 },
+  create: { width: 380, height: 388 },
 };
 
 /**

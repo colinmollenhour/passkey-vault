@@ -22,6 +22,14 @@ import {
   type ExportFormat,
 } from '../porting';
 import { checkVaultSecret, type VaultSecretProblem } from '../crypto/vault-secret';
+import {
+  DOMAIN_RULES_KEY,
+  EXCLUDED_SITES_KEY,
+  normalizeDomainRules,
+  normalizeExcludedSites,
+  type DomainRules,
+  type InterceptionMode,
+} from '../utils/domain-rules';
 
 const DEFAULT_RELAYS = [
   'wss://vaultsync.fenko.nz',
@@ -29,12 +37,6 @@ const DEFAULT_RELAYS = [
   'wss://nos.lol',
   'wss://relay.nostr.band',
 ];
-
-interface DomainRules {
-  mode: 'disabled' | 'all' | 'allowlist' | 'blocklist';
-  domains: string[];
-  passthroughOnNoPasskey?: boolean;
-}
 
 interface SyncStatusResponse {
   enabled: boolean;
@@ -138,38 +140,42 @@ function setupNavigation(): void {
 // ==================== INTERCEPTION ====================
 
 async function loadInterceptionSettings(): Promise<void> {
-  const result = await chrome.storage.local.get('domain_rules');
-  const rules = getDomainRules(result.domain_rules);
+  // Another options page, or the vault's dialog, can change these meanwhile.
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local') return;
+    if (changes[DOMAIN_RULES_KEY]) {
+      showDomainRules(normalizeDomainRules(changes[DOMAIN_RULES_KEY].newValue));
+    }
+    if (changes[EXCLUDED_SITES_KEY]) {
+      renderExcludedSites(normalizeExcludedSites(changes[EXCLUDED_SITES_KEY].newValue));
+    }
+  });
 
-  // Set radio
-  const radio = document.querySelector(
-    `input[name="interception-mode"][value="${rules.mode}"]`
-  ) as HTMLInputElement | null;
-  if (radio) radio.checked = true;
+  const result = await chrome.storage.local.get([DOMAIN_RULES_KEY, EXCLUDED_SITES_KEY]);
+  showDomainRules(normalizeDomainRules(result[DOMAIN_RULES_KEY]));
+  renderExcludedSites(normalizeExcludedSites(result[EXCLUDED_SITES_KEY]));
 
   const passthroughToggle = document.getElementById(
     'passthrough-missing-toggle'
   ) as HTMLInputElement | null;
   if (passthroughToggle) {
-    passthroughToggle.checked = rules.passthroughOnNoPasskey !== false;
     passthroughToggle.addEventListener('change', async () => {
-      const current = await chrome.storage.local.get('domain_rules');
-      const updated = getDomainRules(current.domain_rules);
-      updated.passthroughOnNoPasskey = passthroughToggle.checked;
-      await chrome.storage.local.set({ domain_rules: updated });
+      // Read before the await: a storage change can re-render the checkbox.
+      const enabled = passthroughToggle.checked;
+      const current = await chrome.storage.local.get(DOMAIN_RULES_KEY);
+      const updated = normalizeDomainRules(current[DOMAIN_RULES_KEY]);
+      updated.passthroughOnNoPasskey = enabled;
+      await chrome.storage.local.set({ [DOMAIN_RULES_KEY]: updated });
     });
   }
-
-  updateDomainListVisibility(rules.mode);
-  renderDomainList(rules.domains);
 
   // Mode change
   document.querySelectorAll('input[name="interception-mode"]').forEach((input) => {
     input.addEventListener('change', async (e) => {
-      const mode = (e.target as HTMLInputElement).value as DomainRules['mode'];
-      const current = await chrome.storage.local.get('domain_rules');
-      const updated: DomainRules = { ...getDomainRules(current.domain_rules), mode };
-      await chrome.storage.local.set({ domain_rules: updated });
+      const mode = (e.target as HTMLInputElement).value as InterceptionMode;
+      const current = await chrome.storage.local.get(DOMAIN_RULES_KEY);
+      const updated: DomainRules = { ...normalizeDomainRules(current[DOMAIN_RULES_KEY]), mode };
+      await chrome.storage.local.set({ [DOMAIN_RULES_KEY]: updated });
       updateDomainListVisibility(mode);
     });
   });
@@ -182,6 +188,22 @@ async function loadInterceptionSettings(): Promise<void> {
   domainInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') addDomain(domainInput);
   });
+}
+
+/** Show the stored mode, fallback toggle and domain list. */
+function showDomainRules(rules: DomainRules): void {
+  const radio = document.querySelector(
+    `input[name="interception-mode"][value="${rules.mode}"]`
+  ) as HTMLInputElement | null;
+  if (radio) radio.checked = true;
+
+  const passthroughToggle = document.getElementById(
+    'passthrough-missing-toggle'
+  ) as HTMLInputElement | null;
+  if (passthroughToggle) passthroughToggle.checked = rules.passthroughOnNoPasskey;
+
+  updateDomainListVisibility(rules.mode);
+  renderDomainList(rules.domains);
 }
 
 function updateDomainListVisibility(mode: string): void {
@@ -205,8 +227,8 @@ async function addDomain(input: HTMLInputElement): Promise<void> {
     .replace(/\/.*$/, '');
   if (!domain) return;
 
-  const result = await chrome.storage.local.get('domain_rules');
-  const rules = getDomainRules(result.domain_rules);
+  const result = await chrome.storage.local.get(DOMAIN_RULES_KEY);
+  const rules = normalizeDomainRules(result[DOMAIN_RULES_KEY]);
 
   if (rules.domains.includes(domain)) {
     input.value = '';
@@ -214,26 +236,17 @@ async function addDomain(input: HTMLInputElement): Promise<void> {
   }
 
   rules.domains.push(domain);
-  await chrome.storage.local.set({ domain_rules: rules });
+  await chrome.storage.local.set({ [DOMAIN_RULES_KEY]: rules });
   input.value = '';
   renderDomainList(rules.domains);
 }
 
 async function removeDomain(domain: string): Promise<void> {
-  const result = await chrome.storage.local.get('domain_rules');
-  const rules = getDomainRules(result.domain_rules);
+  const result = await chrome.storage.local.get(DOMAIN_RULES_KEY);
+  const rules = normalizeDomainRules(result[DOMAIN_RULES_KEY]);
   rules.domains = rules.domains.filter((d) => d !== domain);
-  await chrome.storage.local.set({ domain_rules: rules });
+  await chrome.storage.local.set({ [DOMAIN_RULES_KEY]: rules });
   renderDomainList(rules.domains);
-}
-
-function getDomainRules(value: unknown): DomainRules {
-  const partial = (value || {}) as Partial<DomainRules>;
-  return {
-    mode: partial.mode || 'all',
-    domains: Array.isArray(partial.domains) ? partial.domains : [],
-    passthroughOnNoPasskey: partial.passthroughOnNoPasskey !== false,
-  };
 }
 
 function renderDomainList(domains: string[]): void {
@@ -267,6 +280,92 @@ function renderDomainList(domains: string[]): void {
       removeDomain(domain);
     });
   });
+}
+
+/**
+ * The sites turned off from the vault's dialog, shown whatever the mode:
+ * they are left to the browser in every mode, so the user can always see
+ * and undo them.
+ */
+function renderExcludedSites(sites: string[]): void {
+  const list = document.getElementById('excluded-sites-list');
+  const empty = document.getElementById('excluded-sites-empty');
+  if (!list || !empty) return;
+
+  // Rebuilding the rows drops the focused one, so keep the place of a
+  // keyboard user: the same row if it is still listed, else the row that
+  // took its place, else the empty hint.
+  const shown = [...list.querySelectorAll<HTMLButtonElement>('button[data-site]')].map(
+    (button) => button.dataset.site!
+  );
+  const active = document.activeElement;
+  const focusedSite =
+    active instanceof HTMLButtonElement && list.contains(active)
+      ? active.dataset.site
+      : !active || active === document.body
+        ? removingFocusedSite
+        : undefined;
+  removingFocusedSite = undefined;
+
+  empty.style.display = sites.length === 0 ? 'block' : 'none';
+  list.innerHTML = sites
+    .map(
+      (site) => `
+    <div class="domain-item">
+      <span>${escapeHtml(site)}</span>
+      <button data-site="${escapeHtml(site)}" title="${escapeHtml(t('commonRemove'))}" aria-label="${escapeHtml(t('commonRemove'))}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+        </svg>
+      </button>
+    </div>`
+    )
+    .join('');
+
+  const buttons = [...list.querySelectorAll<HTMLButtonElement>('button[data-site]')];
+  buttons.forEach((button) => {
+    button.addEventListener('click', () => removeExcludedSite(button.dataset.site!, button));
+  });
+
+  if (focusedSite === undefined) return;
+  const same = buttons.find((button) => button.dataset.site === focusedSite);
+  const next = buttons[Math.min(Math.max(shown.indexOf(focusedSite), 0), buttons.length - 1)];
+  const target = same ?? next ?? empty;
+  if (target === empty) empty.tabIndex = -1;
+  target.focus();
+}
+
+/**
+ * The site whose focused Remove button was pressed. Disabling the button
+ * while the removal runs takes focus from it, so the list re-rendered
+ * after the removal reads the user's place from here.
+ */
+let removingFocusedSite: string | undefined;
+
+/**
+ * Return a site to the interception mode. The background writes the list,
+ * and the list shown follows storage.onChanged: the list in the response
+ * can be older than a change that reached this page first.
+ */
+async function removeExcludedSite(site: string, button: HTMLButtonElement): Promise<void> {
+  if (document.activeElement === button) removingFocusedSite = site;
+  button.disabled = true;
+  let response: Record<string, unknown> | undefined;
+  try {
+    response = await sendMessage('EXCLUDED_SITES_REMOVE', { rpId: site });
+  } catch {
+    response = undefined;
+  }
+  if (!response?.success) {
+    button.disabled = false;
+    if (removingFocusedSite === site) {
+      removingFocusedSite = undefined;
+      // Back to the button, unless the user moved on meanwhile.
+      const active = document.activeElement;
+      if (!active || active === document.body || active === button) button.focus();
+    }
+    alert(t('optionsExcludedSiteRemoveFailed', { rp: site }));
+  }
 }
 
 // ==================== SYNC ====================
@@ -377,7 +476,9 @@ async function loadRelayList(): Promise<void> {
 
   // Mark relays with an open connection from debug info
   const debugInfo = await sendMessage('GET_SYNC_DEBUG_INFO');
-  const relayStates: Array<{ url: string; state: string }> = debugInfo.debugInfo?.relays || [];
+  const relayStates =
+    (debugInfo.debugInfo as { relays?: Array<{ url: string; state: string }> } | undefined)
+      ?.relays || [];
   const connectedRelays = new Set(relayStates.filter((r) => r.state === 'OPEN').map((r) => r.url));
 
   renderRelayList(relays, connectedRelays);
@@ -686,7 +787,7 @@ async function loadDeveloperSettings(): Promise<void> {
   // Debug toggle
   const debugToggle = document.getElementById('debug-toggle') as HTMLInputElement;
   const debugResponse = await sendMessage('GET_DEBUG_LOGGING');
-  debugToggle.checked = debugResponse.enabled;
+  debugToggle.checked = debugResponse.enabled === true;
 
   debugToggle.addEventListener('change', async () => {
     await sendMessage('SET_DEBUG_LOGGING', { enabled: debugToggle.checked });
@@ -732,7 +833,7 @@ async function loadStorageInspector(): Promise<void> {
   const container = document.getElementById('storage-inspector')!;
   const totalEl = document.getElementById('storage-total')!;
 
-  const data = await chrome.storage.local.get(null);
+  const data = await chrome.storage.local.get();
   const keys = Object.keys(data).sort();
   let totalBytes = 0;
 
@@ -772,12 +873,13 @@ async function loadSyncLog(): Promise<void> {
   const container = document.getElementById('sync-log')!;
   const response = await sendMessage('GET_SYNC_DEBUG_LOGS');
 
-  if (!response.logs || response.logs.length === 0) {
+  const stored = (response.logs as DebugLogEntry[] | undefined) ?? [];
+  if (stored.length === 0) {
     container.innerHTML = `<p class="empty-hint">${t('optionsNoSyncLogs')}</p>`;
     return;
   }
 
-  const logs: DebugLogEntry[] = response.logs.slice(-100).reverse();
+  const logs = stored.slice(-100).reverse();
   container.innerHTML = logs
     .map(
       (entry) => `

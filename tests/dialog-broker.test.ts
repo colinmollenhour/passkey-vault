@@ -12,6 +12,7 @@
 
 import { EXTENSION_PAGE, setupVault, vaultReady } from './helpers/harness';
 import { EXTENSION_ID, EXTENSION_ORIGIN, type MessageSender } from './helpers/fake-chrome';
+import { DialogBroker } from '../src/background/dialog-broker';
 
 const vault = setupVault('https://bank.example/login');
 
@@ -361,6 +362,412 @@ describe('deciding', () => {
   });
 });
 
+const createPayload = () => ({
+  kind: 'create',
+  publicKey: {
+    rp: { name: 'Bank', id: 'bank.example' },
+    user: { id: 'AQ', name: 'carol@bank.example', displayName: 'Carol' },
+    challenge: 'AAAA',
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+  },
+});
+
+describe('handing a request to the browser', () => {
+  it('passes on "Use another device" from the create confirmation, leaving no approval', async () => {
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+
+    expect((await decide(token, { action: 'passthrough' })).success).toBe(true);
+    await vault.settle();
+
+    expect(results().map((sent) => sent.message.outcome)).toEqual(['passthrough']);
+    const created: any = await vault.send(
+      {
+        type: 'CREATE_PASSKEY',
+        requestId: 'req-1',
+        payload: { publicKey: createPayload().publicKey },
+      },
+      PAGE
+    );
+    expect(created.success).toBe(false);
+    expect(await vault.passkeys()).toHaveLength(PASSKEYS.length);
+  });
+});
+
+describe('turning the vault off for a site', () => {
+  it.each([
+    ['sign-in', getPayload()],
+    ['registration', createPayload()],
+  ])('saves the %s session’s own RP ID, whatever the decision names', async (_label, payload) => {
+    const { token } = await open('req-1', payload as any);
+    await attach(token);
+
+    const response = await decide(token, {
+      action: 'exclude-site',
+      rpId: 'evil.example',
+      site: 'evil.example',
+    });
+    await vault.settle();
+
+    expect(response).toEqual({ success: true });
+    expect(vault.storage.excluded_sites).toEqual(['bank.example']);
+    expect(results().map((sent) => sent.message.outcome)).toEqual(['excluded']);
+  });
+
+  it('leaves no approval behind', async () => {
+    const { token } = await open('req-1');
+    await attach(token);
+    await decide(token, { action: 'exclude-site' });
+
+    const signed: any = await vault.send(
+      {
+        type: 'GET_PASSKEY',
+        requestId: 'req-1',
+        payload: { publicKey: getPayload().publicKey },
+      },
+      PAGE
+    );
+
+    expect(signed.success).toBe(false);
+    expect((await decide(token, { action: 'use', id: 'cred-alice' })).success).toBe(false);
+  });
+
+  const notices = () =>
+    vault.chrome.sentToTabs.filter((sent) => sent.message.type === 'PASSKEY_VAULT_SITE_EXCLUDED');
+
+  it('tells the top frame to show the notice, after the dialog ended', async () => {
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+
+    await decide(token, { action: 'exclude-site' });
+    await vault.settle();
+
+    expect(notices()).toEqual([
+      {
+        tabId: 7,
+        frameId: 0,
+        message: {
+          type: 'PASSKEY_VAULT_SITE_EXCLUDED',
+          rpId: 'bank.example',
+          origin: 'https://bank.example',
+        },
+      },
+    ]);
+    const sent = vault.chrome.sentToTabs.map((entry) => entry.message.type);
+    expect(sent.indexOf('PASSKEY_DIALOG_RESULT')).toBeLessThan(
+      sent.indexOf('PASSKEY_VAULT_SITE_EXCLUDED')
+    );
+  });
+
+  it('shows the notice in the top frame for an embedded frame of the same site', async () => {
+    const embedded = { ...PAGE, frameId: 3, url: 'https://bank.example/embed' };
+    const { token } = await open('req-1', createPayload() as any, embedded);
+    await attach(token);
+
+    await decide(token, { action: 'exclude-site' });
+    await vault.settle();
+
+    expect(results().map((sent) => sent.frameId)).toEqual([3]);
+    expect(notices().map((sent) => sent.frameId)).toEqual([0]);
+  });
+
+  it('leaves the notice to the embedded frame when the top page is another site', async () => {
+    // A widget of pay.example in a page of bank.example (this test's page).
+    const widget = {
+      ...PAGE,
+      frameId: 3,
+      url: 'https://pay.example/widget',
+      origin: 'https://pay.example',
+    };
+    const payload = createPayload();
+    payload.publicKey.rp = { name: 'Pay', id: 'pay.example' };
+    const { token } = await open('req-1', payload as any, widget);
+    await attach(token);
+
+    await decide(token, { action: 'exclude-site' });
+    for (let i = 0; i < 5 && notices().length < 2; i++) await vault.settle();
+
+    expect(notices().map((sent) => [sent.frameId, sent.message.origin])).toEqual([
+      [0, 'https://pay.example'],
+      [3, 'https://pay.example'],
+    ]);
+  });
+
+  it('shows no notice when the setting was not saved', async () => {
+    vault.chrome.faults.push({ op: 'set', match: (keys) => keys.includes('excluded_sites') });
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+
+    await decide(token, { action: 'exclude-site' });
+    await vault.settle();
+
+    expect(notices()).toEqual([]);
+  });
+
+  it('works while the vault is locked', async () => {
+    await vault.send({ type: 'SETUP_MASTER_PASSWORD', payload: { password: '123456' } });
+    await vault.send({ type: 'LOCK_SECURE_STORAGE' });
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+
+    expect((await decide(token, { action: 'exclude-site' })).success).toBe(true);
+    expect(vault.storage.excluded_sites).toEqual(['bank.example']);
+  });
+
+  it('keeps sites excluded earlier', async () => {
+    await vault.reset({ passkeys: PASSKEYS, excluded_sites: ['other.example'] });
+    const { token } = await open('req-1');
+    await attach(token);
+
+    await decide(token, { action: 'exclude-site' });
+
+    expect(vault.storage.excluded_sites).toEqual(['other.example', 'bank.example']);
+  });
+
+  it.each<[string, (token: string) => Promise<any>]>([
+    [
+      'another frame than the one that claimed the dialog',
+      async (token) => decide(token, { action: 'exclude-site' }, { ...DIALOG, frameId: 5 }),
+    ],
+    [
+      'the requesting page’s content script',
+      async (token) => decide(token, { action: 'exclude-site' }, PAGE),
+    ],
+    ['a token it did not issue', async () => decide('A'.repeat(43), { action: 'exclude-site' })],
+    [
+      'a dialog already decided',
+      async (token) => {
+        await decide(token, { action: 'cancel' });
+        return decide(token, { action: 'exclude-site' });
+      },
+    ],
+    [
+      'a dialog the page gave up on',
+      async (token) => {
+        await vault.send({ type: 'PASSKEY_DIALOG_CANCEL', requestId: 'req-1' }, PAGE);
+        return decide(token, { action: 'exclude-site' });
+      },
+    ],
+  ])('is refused from %s', async (_label, attempt) => {
+    const { token } = await open('req-1');
+    await attach(token);
+
+    const response = await attempt(token);
+    await vault.settle();
+
+    expect(response?.success).not.toBe(true);
+    expect(vault.storage.excluded_sites).toBeUndefined();
+    expect(results().map((sent) => sent.message.outcome)).not.toContain('excluded');
+  });
+
+  it('is refused before any frame claimed the dialog', async () => {
+    const { token } = await open('req-1');
+
+    expect((await decide(token, { action: 'exclude-site' })).success).toBe(false);
+    expect(vault.storage.excluded_sites).toBeUndefined();
+  });
+
+  it('leaves the dialog open when the setting cannot be saved', async () => {
+    vault.chrome.faults.push({
+      op: 'set',
+      match: (keys) => keys.includes('excluded_sites'),
+      times: 1,
+    });
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+
+    const failed = await decide(token, { action: 'exclude-site' });
+    await vault.settle();
+
+    expect(failed).toMatchObject({ success: false, code: 'EXCLUDE_FAILED' });
+    expect(vault.storage.excluded_sites).toBeUndefined();
+    expect(results()).toEqual([]);
+    // The user can try again, or choose something else.
+    expect((await decide(token, { action: 'exclude-site' })).success).toBe(true);
+    expect(vault.storage.excluded_sites).toEqual(['bank.example']);
+  });
+
+  it('lets the user choose another device after a failed save', async () => {
+    vault.chrome.faults.push({ op: 'set', match: (keys) => keys.includes('excluded_sites') });
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+    await decide(token, { action: 'exclude-site' });
+
+    expect((await decide(token, { action: 'passthrough' })).success).toBe(true);
+    await vault.settle();
+
+    expect(results().map((sent) => sent.message.outcome)).toEqual(['passthrough']);
+  });
+
+  /** A write of the dialog sessions that leaves none open: the one ending the only dialog. */
+  const endsSession = (keys: string[], items?: Record<string, unknown>) =>
+    keys.includes('vault_dialog_sessions') &&
+    Object.keys((items?.vault_dialog_sessions as Record<string, unknown>) ?? {}).length === 0;
+
+  it('leaves the dialog open when its session cannot be saved before the setting', async () => {
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+    vault.chrome.faults.push({
+      area: 'session',
+      op: 'set',
+      match: (keys) => keys.includes('vault_dialog_sessions'),
+      times: 1,
+    });
+
+    const failed = await decide(token, { action: 'exclude-site' });
+    await vault.settle();
+
+    expect(failed).toMatchObject({ success: false, code: 'EXCLUDE_FAILED' });
+    expect(vault.storage.excluded_sites).toBeUndefined();
+    expect(results()).toEqual([]);
+    // Not held as being excluded: it takes a decision again.
+    expect((await decide(token, { action: 'exclude-site' })).success).toBe(true);
+    expect(vault.storage.excluded_sites).toEqual(['bank.example']);
+    await vault.settle();
+    expect(results().map((sent) => sent.message.outcome)).toEqual(['excluded']);
+  });
+
+  it('leaves the dialog open when its session cannot be ended after the setting', async () => {
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+    vault.chrome.faults.push({ area: 'session', op: 'set', match: endsSession, times: 1 });
+
+    const failed = await decide(token, { action: 'exclude-site' });
+    await vault.settle();
+
+    expect(failed).toMatchObject({ success: false, code: 'EXCLUDE_FAILED' });
+    expect(vault.storage.excluded_sites).toEqual(['bank.example']);
+    expect(results()).toEqual([]);
+    // Still pending and not held as being excluded: the user can choose another device.
+    expect((await decide(token, { action: 'passthrough' })).success).toBe(true);
+    await vault.settle();
+    expect(results().map((sent) => sent.message.outcome)).toEqual(['passthrough']);
+  });
+
+  it('can be retried after its session could not be ended, saving the site once', async () => {
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+    vault.chrome.faults.push({ area: 'session', op: 'set', match: endsSession, times: 1 });
+    await decide(token, { action: 'exclude-site' });
+
+    expect((await decide(token, { action: 'exclude-site' })).success).toBe(true);
+    await vault.settle();
+
+    expect(vault.storage.excluded_sites).toEqual(['bank.example']);
+    expect(results().map((sent) => sent.message.outcome)).toEqual(['excluded']);
+  });
+});
+
+describe('the broker saving an exclusion', () => {
+  /** A broker on its own, with an exclusion write the test settles. */
+  function brokerWithWrite() {
+    let settleWrite!: { resolve: () => void; reject: (error: Error) => void };
+    const excludeSite = jest.fn(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          settleWrite = { resolve, reject };
+        })
+    );
+    const broker = new DialogBroker({
+      assertUnlocked: async () => undefined,
+      passkeysFor: async () => [],
+      excludeSite,
+    });
+    return { broker, excludeSite, write: () => settleWrite };
+  }
+
+  const REQUESTER = '7:0:https://bank.example';
+
+  async function claimed(broker: DialogBroker, publicKey: Record<string, unknown>) {
+    const opened: any = await broker.open(
+      {
+        type: 'PASSKEY_DIALOG_OPEN',
+        requestId: 'req-1',
+        requester: REQUESTER,
+        payload: { kind: 'create', publicKey },
+      },
+      PAGE
+    );
+    await broker.handleDialogMessage(
+      { type: 'PASSKEY_DIALOG_ATTACH', token: opened.token },
+      DIALOG
+    );
+    return (decision: Record<string, unknown>) =>
+      broker.handleDialogMessage(
+        { type: 'PASSKEY_DIALOG_DECIDE', token: opened.token, decision },
+        DIALOG
+      ) as Promise<any>;
+  }
+
+  const flushQueue = async () => {
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  it('takes no other decision while the setting is being saved', async () => {
+    const { broker, excludeSite, write } = brokerWithWrite();
+    const decideFor = await claimed(broker, { rpId: 'bank.example' });
+
+    const first = decideFor({ action: 'exclude-site' });
+    await flushQueue();
+    expect(excludeSite).toHaveBeenCalledWith('bank.example');
+
+    expect((await decideFor({ action: 'exclude-site' })).success).toBe(false);
+    expect((await decideFor({ action: 'cancel' })).success).toBe(false);
+    expect((await decideFor({ action: 'create' })).success).toBe(false);
+    write().resolve();
+
+    expect(await first).toEqual({ success: true });
+    expect(excludeSite).toHaveBeenCalledTimes(1);
+    await flushQueue();
+    expect(results().map((sent) => sent.message.outcome)).toEqual(['excluded']);
+  });
+
+  it('still shows the notice when the page gave up while the setting was being saved', async () => {
+    const { broker, write } = brokerWithWrite();
+    const decideFor = await claimed(broker, { rpId: 'bank.example' });
+
+    const first = decideFor({ action: 'exclude-site' });
+    await flushQueue();
+    await broker.cancel({
+      type: 'PASSKEY_DIALOG_CANCEL',
+      requestId: 'req-1',
+      requester: REQUESTER,
+    });
+    write().resolve();
+
+    expect(await first).toEqual({ success: true });
+    await flushQueue();
+    // The request ended with the page, but the site is turned off: say so.
+    expect(results()).toEqual([]);
+    expect(
+      vault.chrome.sentToTabs
+        .filter((sent) => sent.message.type === 'PASSKEY_VAULT_SITE_EXCLUDED')
+        .map((sent) => [sent.frameId, sent.message.rpId])
+    ).toEqual([[0, 'bank.example']]);
+  });
+
+  it('takes decisions again once a save failed', async () => {
+    const { broker, write } = brokerWithWrite();
+    const decideFor = await claimed(broker, { rpId: 'bank.example' });
+
+    const first = decideFor({ action: 'exclude-site' });
+    await flushQueue();
+    write().reject(new Error('Quota exceeded'));
+
+    expect(await first).toMatchObject({ success: false, code: 'EXCLUDE_FAILED' });
+    expect((await decideFor({ action: 'cancel' })).success).toBe(true);
+  });
+
+  it('refuses to save a session without an RP ID', async () => {
+    const { broker, excludeSite } = brokerWithWrite();
+    const decideFor = await claimed(broker, {});
+
+    expect((await decideFor({ action: 'exclude-site' })).success).toBe(false);
+    expect(excludeSite).not.toHaveBeenCalled();
+    expect((await decideFor({ action: 'cancel' })).success).toBe(true);
+  });
+});
+
 describe('closing a dialog', () => {
   it('closes it when the page gives up', async () => {
     const { token } = await open('req-1');
@@ -457,6 +864,36 @@ describe('a dialog in a window of its own', () => {
     expect(vault.chrome.windows.map((window) => window.open)).toEqual([false]);
     expect(results().map((sent) => sent.message.outcome)).toEqual(['approved']);
   });
+
+  it.each([['passthrough'], ['exclude-site']])(
+    'closes the window before handing the request to the browser on %s',
+    async (action) => {
+      await openInWindow();
+      await vault.settle();
+      const token = tokenOf(opened[0]);
+      await attach(token, windowSender(opened[0]));
+      // A window that takes a while to close, as a real one does.
+      const windows = vault.chrome.api.windows as { remove: (id: number) => Promise<void> };
+      const remove = windows.remove;
+      const resultsWhenClosed: number[] = [];
+      windows.remove = async (id) => {
+        for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+        resultsWhenClosed.push(results().length);
+        return remove(id);
+      };
+      try {
+        await decide(token, { action }, windowSender(opened[0]));
+        await vault.settle();
+      } finally {
+        windows.remove = remove;
+      }
+
+      expect(resultsWhenClosed).toEqual([0]);
+      expect(results().map((sent) => sent.message.outcome)).toEqual([
+        action === 'passthrough' ? 'passthrough' : 'excluded',
+      ]);
+    }
+  );
 
   it('cancels when the user closes the window', async () => {
     await openInWindow();

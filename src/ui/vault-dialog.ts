@@ -12,6 +12,7 @@ import { initTheme } from '../theme';
 import {
   DIALOG_MESSAGES,
   DIALOG_TOKEN_MESSAGE,
+  EXCLUDE_FAILED,
   type VaultDialogDecision,
   type VaultDialogMode,
   type VaultDialogView,
@@ -26,7 +27,8 @@ export interface GateContext {
   reference(): Promise<number | undefined>;
   /**
    * Whether the parts the user decides on are all inside the viewport:
-   * the title and message, the passkey selected, and the buttons. A frame
+   * the title and message, the passkey selected (or the new passkey's
+   * account), and the buttons. A frame
    * the page made too small to show them crops the dialog's content while
    * the dialog itself still "fits".
    */
@@ -87,6 +89,8 @@ export class VaultDialog {
   private gate: ConsentGate | null = null;
   private settled = false;
   private selectedId: string | null = null;
+  /** The RP ID the dialog is for, as the background bound it. */
+  private rpId = '';
   private readonly consentButtons: HTMLButtonElement[] = [];
   private mode: VaultDialogMode = 'frame';
   private unverifiedTimer: ReturnType<typeof setTimeout> | null = null;
@@ -122,6 +126,7 @@ export class VaultDialog {
     const list = this.el('passkeys');
     footer.textContent = '';
     list.textContent = '';
+    this.rpId = view.rpId;
 
     if (view.kind === 'get') {
       this.el('title').textContent = t('pageChoosePasskey');
@@ -146,7 +151,8 @@ export class VaultDialog {
             if (this.selectedId) this.decide({ action: 'use', id: this.selectedId });
           },
           true
-        )
+        ),
+        this.excludeButton(view.rpId)
       );
     } else {
       // The account the passkey is for, where the picker lists passkeys:
@@ -159,17 +165,25 @@ export class VaultDialog {
         user: view.userName || t('commonUnknownUser'),
         rp: view.rpId,
       });
+      // The same layout as the picker's: the two ways out side by side,
+      // the confirmation below them. "Use another device" hands this one
+      // request to the browser's own dialog (a security key, a phone),
+      // which asks for its own consent, so it needs none here.
       footer.append(
         this.button('pkv-cancel', t('commonCancel'), 'secondary', () =>
           this.decide({ action: 'cancel' })
         ),
+        this.button('pkv-passthrough', t('pageUseAnotherDevice'), 'secondary', () =>
+          this.decide({ action: 'passthrough' })
+        ),
         this.button(
           'pkv-create',
           t('pageCreate'),
-          'primary',
+          'primary wide',
           () => this.decide({ action: 'create' }),
           true
-        )
+        ),
+        this.excludeButton(view.rpId)
       );
     }
 
@@ -180,17 +194,55 @@ export class VaultDialog {
     card.hidden = false;
     this.mode = view.mode;
     this.doc.documentElement.classList.toggle('in-window', view.mode === 'window');
-    this.gate = this.env.createGate(card, {
-      mode: view.mode,
+    this.armGate();
+    this.focusStart();
+  }
+
+  /**
+   * Open a new consent gate: consent buttons count only once it says the
+   * dialog has been on screen long enough, from now.
+   */
+  private armGate(): void {
+    this.gate?.dispose();
+    const gate = this.env.createGate(this.el('card'), {
+      mode: this.mode,
       reference: () => this.reference(),
       fits: () => this.fits(),
     });
-    this.gate.onChange(() => this.updateConsentButtons());
+    this.gate = gate;
+    gate.onChange(() => {
+      if (this.gate === gate) this.updateConsentButtons();
+    });
     this.updateConsentButtons();
-    // Focus the selection, or the dialog itself: never a consent button, so
-    // a keystroke meant for the page cannot confirm.
-    const checked = list.querySelector<HTMLElement>('[aria-checked="true"]');
-    (checked ?? card).focus({ preventScroll: true });
+  }
+
+  /**
+   * Focus the selection, or the dialog itself: never a consent button, so
+   * a keystroke meant for the page cannot confirm.
+   */
+  private focusStart(): void {
+    const checked = this.el('passkeys').querySelector<HTMLElement>('[aria-checked="true"]');
+    (checked ?? this.el('card')).focus({ preventScroll: true });
+  }
+
+  /**
+   * "Turn off on {rp}": a persistent change to the user's settings, so it
+   * is a consent button like Create and Continue, and it sits in the
+   * footer, which the gate checks is in view. The decision names no site;
+   * the background excludes the RP ID of this dialog's session.
+   */
+  private excludeButton(rpId: string): HTMLButtonElement {
+    const button = this.button(
+      'pkv-exclude',
+      t('dialogExcludeSite', { rp: rpId }),
+      'link wide',
+      () => this.decide({ action: 'exclude-site' }),
+      true
+    );
+    // The label can be cut short for a long RP ID; the tooltip has all of
+    // it, and what turning it off means.
+    button.title = `${t('dialogExcludeSite', { rp: rpId })}\n${t('dialogExcludeSiteHint', { rp: rpId })}`;
+    return button;
   }
 
   /** A read-only row like a picker entry: the new passkey's account and site. */
@@ -378,7 +430,11 @@ export class VaultDialog {
       element.scrollHeight <= element.clientHeight + 1 &&
       element.scrollWidth <= element.clientWidth + 1;
     const body = this.el('body').getBoundingClientRect();
-    const selected = this.el('passkeys').querySelector('[aria-checked="true"]');
+    // The row the decision is about: the passkey picked, or the account
+    // a new passkey is for. Either must be in the body, not cut by it.
+    const passkeys = this.el('passkeys');
+    const selected =
+      passkeys.querySelector('[aria-checked="true"]') ?? passkeys.querySelector('.passkey-summary');
     const selectedShown =
       !selected ||
       (() => {
@@ -410,22 +466,54 @@ export class VaultDialog {
     this.settled = true;
     this.updateConsentButtons();
     this.gate?.dispose();
-    let response: { success?: boolean } | undefined;
+    let response: { success?: boolean; code?: unknown } | undefined;
+    let unanswered = false;
     try {
       response = (await this.env.send({
         type: DIALOG_MESSAGES.DECIDE,
         token: this.token,
         decision,
-      })) as { success?: boolean } | undefined;
+      })) as { success?: boolean; code?: unknown } | undefined;
     } catch {
       response = undefined;
+      unanswered = true;
     }
     if (!response?.success) {
+      // No answer at all means the worker stopped while saving, which
+      // leaves the session pending: decidable again, not gone. A retry
+      // that finds it gone gets "no longer active" then.
+      if (decision.action === 'exclude-site' && (unanswered || response?.code === EXCLUDE_FAILED)) {
+        this.showExcludeFailed();
+        return;
+      }
       this.showInactive();
       return;
     }
     // The background closes the window too; this is in case it cannot.
     if (this.env.inWindow) this.env.window.close();
+  }
+
+  /**
+   * The exclusion did not finish, and the request is still open: say so
+   * and let the user decide again. The status row is the window offer's,
+   * so the error takes the message's place: the header keeps its height.
+   * The message named the site, and on the sign-in picker nothing else
+   * names it in full, so the error names it too: consent starts over on a
+   * dialog that still says which site it is for. The gate waits again
+   * before any consent click counts. The error says turning off failed,
+   * not that nothing was saved: the site may be saved while ending the
+   * request failed, and a retry saves it again harmlessly. It must fit the
+   * message's two lines, a long RP ID included, or the gate cannot open.
+   */
+  private showExcludeFailed(): void {
+    const error = this.doc.createElement('span');
+    error.className = 'card-error';
+    error.setAttribute('role', 'alert');
+    error.textContent = t('dialogExcludeFailed', { rp: this.rpId });
+    this.el('subtitle').replaceChildren(error);
+    this.settled = false;
+    this.armGate();
+    this.focusStart();
   }
 
   /** The request is gone: the page gave up, or another dialog replaced this one. */

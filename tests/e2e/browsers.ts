@@ -146,15 +146,22 @@ export async function launchNative(site: Site): Promise<BrowserContext> {
   });
 }
 
-/** Give a page a platform authenticator that always succeeds, as Chrome's own WebAuthn client sees one. */
-export async function addVirtualAuthenticator(page: Page): Promise<string> {
+/**
+ * Give a page an authenticator that always succeeds, as Chrome's own
+ * WebAuthn client sees one: a platform one by default, or a security key
+ * (transport 'usb') for requests that ask for a cross-platform authenticator.
+ */
+export async function addVirtualAuthenticator(
+  page: Page,
+  transport: 'internal' | 'usb' = 'internal'
+): Promise<string> {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('WebAuthn.enable', { enableUI: false });
   const { authenticatorId } = await cdp.send('WebAuthn.addVirtualAuthenticator', {
     options: {
       protocol: 'ctap2',
       ctap2Version: 'ctap2_1',
-      transport: 'internal',
+      transport,
       hasResidentKey: true,
       hasUserVerification: true,
       isUserVerified: true,

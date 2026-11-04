@@ -45,12 +45,20 @@ export interface PasskeyOption {
 export type SelectorResult =
   | { action: 'use'; id: string }
   | { action: 'cancel' }
-  | { action: 'passthrough' };
+  | { action: 'passthrough' }
+  | { action: 'exclude-site' };
+
+/**
+ * The create confirmation's buttons: Create, Cancel, "Use another device"
+ * (passthrough) and "Turn off on {rp}" (exclude-site). `true` and `false`
+ * stand for Create and Cancel.
+ */
+export type CreateAnswer = boolean | 'create' | 'cancel' | 'passthrough' | 'exclude-site';
 
 export interface UserScript {
   /**
    * Answer to "Create a passkey for <user> on <rp>?":
-   * (rpId, userName, signal) => boolean | Promise<boolean>.
+   * (rpId, userName, signal) => CreateAnswer | Promise<CreateAnswer>.
    */
   confirmCreate: jest.Mock;
   /**
@@ -66,6 +74,7 @@ export interface UserScript {
   createdToast: jest.Mock;
   usedToast: jest.Mock;
   errorToast: jest.Mock;
+  infoToast: jest.Mock;
 }
 
 export interface Vault {
@@ -108,6 +117,8 @@ export interface MountedDialog {
   mode: 'frame' | 'window';
   /** What the background showed the dialog, once it claimed its session. */
   view?: any;
+  /** The background's answer to the dialog's decision. */
+  decided?: any;
   /** The frame is off the page, or the window closed. */
   unmounted: boolean;
   /** Stand in for the page removing the frame, or the user closing the window. */
@@ -168,6 +179,7 @@ function defaultUser(): UserScript {
     createdToast: jest.fn(),
     usedToast: jest.fn(),
     errorToast: jest.fn(),
+    infoToast: jest.fn(),
   };
 }
 
@@ -211,6 +223,11 @@ export function setupVault(
     frameId: 0,
   });
 
+  // The page has focus, except while a dialog window the background opened
+  // has it: the browser refuses WebAuthn to an unfocused page.
+  const windowsWithFocus = new Set<number>();
+  jest.spyOn(document, 'hasFocus').mockImplementation(() => windowsWithFocus.size === 0);
+
   const vault = {
     user,
     dialogs: [] as MountedDialog[],
@@ -223,6 +240,7 @@ export function setupVault(
     showPasskeyCreatedNotification: (...args: unknown[]) => vault.user.createdToast(...args),
     showPasskeyUsedNotification: (...args: unknown[]) => vault.user.usedToast(...args),
     showErrorNotification: (...args: unknown[]) => vault.user.errorToast(...args),
+    showInfoNotification: (...args: unknown[]) => vault.user.infoToast(...args),
   }));
 
   const startWorker = () => {
@@ -266,6 +284,7 @@ export function setupVault(
       vault.dialogMode = 'frame';
       vault.launchers.length = 0;
       chrome.windows.length = 0;
+      windowsWithFocus.clear();
       chrome.refuseWindowPlacement = false;
       vault.user = defaultUser();
       native.reset();
@@ -324,15 +343,17 @@ export function setupVault(
         const choice: SelectorResult = await vault.user.choosePasskey(offered, view.rpId, closed);
         decision = choice;
       } else {
-        const confirmed = await vault.user.confirmCreate(
+        const answer: CreateAnswer = await vault.user.confirmCreate(
           view.rpId,
           view.userName || 'Unknown User',
           closed
         );
-        decision = { action: confirmed ? 'create' : 'cancel' };
+        decision = {
+          action: typeof answer === 'string' ? answer : answer ? 'create' : 'cancel',
+        };
       }
       if (closed.aborted) return;
-      await deliver({ type: 'PASSKEY_DIALOG_DECIDE', token, decision });
+      mounted.decided = await deliver({ type: 'PASSKEY_DIALOG_DECIDE', token, decision });
     })();
   };
 
@@ -377,6 +398,7 @@ export function setupVault(
 
   /** The dialog page in a popup window the background opened. */
   chrome.onWindowOpened = (opened) => {
+    windowsWithFocus.add(opened.id);
     const closed = new AbortController();
     const mounted: MountedDialog = {
       token: new URL(opened.url).hash.slice(1),
@@ -390,6 +412,9 @@ export function setupVault(
     chrome.whenWindowCloses(opened.id, () => {
       mounted.unmounted = true;
       closed.abort();
+      // The browser gives the page's window focus back.
+      windowsWithFocus.delete(opened.id);
+      if (windowsWithFocus.size === 0) window.dispatchEvent(new Event('focus'));
     });
     const sender: MessageSender = {
       id: EXTENSION_ID,

@@ -501,6 +501,15 @@ nav {
   font-family: var(--font-mono);
 }
 
+.domain-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.domain-item button {
+  flex-shrink: 0;
+}
+
 .domain-item button,
 .relay-item button {
   display: inline-flex;
