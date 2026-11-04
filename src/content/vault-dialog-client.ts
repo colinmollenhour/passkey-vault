@@ -41,18 +41,25 @@ export const HANDOFF_FOCUS_WAIT_MS = 1500;
  * focus comes back to the page only after the dialog's window closes. A
  * frame whose ancestors hold focus never has it itself, so the wait is
  * bounded and the request goes on regardless.
+ *
+ * A focus event alone does not end the wait: the page shares DOM events
+ * with this world and can dispatch one while it has no focus, which would
+ * send the request on to be refused. The document must have focus then.
  */
 export function whenFocused(signal: AbortSignal, ms = HANDOFF_FOCUS_WAIT_MS): Promise<void> {
   if (document.hasFocus() || signal.aborted) return Promise.resolve();
   return new Promise((resolve) => {
     const done = () => {
       clearTimeout(timer);
-      window.removeEventListener('focus', done);
+      window.removeEventListener('focus', onFocus);
       signal.removeEventListener('abort', done);
       resolve();
     };
+    const onFocus = () => {
+      if (document.hasFocus()) done();
+    };
     const timer = setTimeout(done, ms);
-    window.addEventListener('focus', done);
+    window.addEventListener('focus', onFocus);
     signal.addEventListener('abort', done);
   });
 }

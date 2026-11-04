@@ -310,7 +310,11 @@ function renderExcludedSites(sites: string[]): void {
   });
 }
 
-/** Return a site to the interception mode. The background writes the list. */
+/**
+ * Return a site to the interception mode. The background writes the list,
+ * and the list shown follows storage.onChanged: the list in the response
+ * can be older than a change that reached this page first.
+ */
 async function removeExcludedSite(site: string, button: HTMLButtonElement): Promise<void> {
   button.disabled = true;
   let response: Record<string, unknown> | undefined;
@@ -322,9 +326,7 @@ async function removeExcludedSite(site: string, button: HTMLButtonElement): Prom
   if (!response?.success) {
     button.disabled = false;
     alert(t('optionsExcludedSiteRemoveFailed', { rp: site }));
-    return;
   }
-  renderExcludedSites(normalizeExcludedSites(response.sites));
 }
 
 // ==================== SYNC ====================

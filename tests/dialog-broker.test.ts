@@ -526,6 +526,64 @@ describe('turning the vault off for a site', () => {
 
     expect(results().map((sent) => sent.message.outcome)).toEqual(['passthrough']);
   });
+
+  /** A write of the dialog sessions that leaves none open: the one ending the only dialog. */
+  const endsSession = (keys: string[], items?: Record<string, unknown>) =>
+    keys.includes('vault_dialog_sessions') &&
+    Object.keys((items?.vault_dialog_sessions as Record<string, unknown>) ?? {}).length === 0;
+
+  it('leaves the dialog open when its session cannot be saved before the setting', async () => {
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+    vault.chrome.faults.push({
+      area: 'session',
+      op: 'set',
+      match: (keys) => keys.includes('vault_dialog_sessions'),
+      times: 1,
+    });
+
+    const failed = await decide(token, { action: 'exclude-site' });
+    await vault.settle();
+
+    expect(failed).toMatchObject({ success: false, code: 'EXCLUDE_FAILED' });
+    expect(vault.storage.excluded_sites).toBeUndefined();
+    expect(results()).toEqual([]);
+    // Not held as being excluded: it takes a decision again.
+    expect((await decide(token, { action: 'exclude-site' })).success).toBe(true);
+    expect(vault.storage.excluded_sites).toEqual(['bank.example']);
+    await vault.settle();
+    expect(results().map((sent) => sent.message.outcome)).toEqual(['excluded']);
+  });
+
+  it('leaves the dialog open when its session cannot be ended after the setting', async () => {
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+    vault.chrome.faults.push({ area: 'session', op: 'set', match: endsSession, times: 1 });
+
+    const failed = await decide(token, { action: 'exclude-site' });
+    await vault.settle();
+
+    expect(failed).toMatchObject({ success: false, code: 'EXCLUDE_FAILED' });
+    expect(vault.storage.excluded_sites).toEqual(['bank.example']);
+    expect(results()).toEqual([]);
+    // Still pending and not held as being excluded: the user can choose another device.
+    expect((await decide(token, { action: 'passthrough' })).success).toBe(true);
+    await vault.settle();
+    expect(results().map((sent) => sent.message.outcome)).toEqual(['passthrough']);
+  });
+
+  it('can be retried after its session could not be ended, saving the site once', async () => {
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+    vault.chrome.faults.push({ area: 'session', op: 'set', match: endsSession, times: 1 });
+    await decide(token, { action: 'exclude-site' });
+
+    expect((await decide(token, { action: 'exclude-site' })).success).toBe(true);
+    await vault.settle();
+
+    expect(vault.storage.excluded_sites).toEqual(['bank.example']);
+    expect(results().map((sent) => sent.message.outcome)).toEqual(['excluded']);
+  });
 });
 
 describe('the broker saving an exclusion', () => {

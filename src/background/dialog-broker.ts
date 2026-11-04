@@ -462,35 +462,67 @@ export class DialogBroker {
    * can try again or choose something else. Only requests that check the
    * settings after the write are affected: another dialog already open for
    * the site keeps going.
+   *
+   * The sessions' own storage can fail too, before the write or after it.
+   * Either way the session is left pending in storage and free to decide
+   * again, and the dialog hears that the setting could not be saved; a
+   * retry after the write only saves the same site again.
    */
   private async exclude(token: string, sender: DialogSender): Promise<unknown> {
-    const claimed = await this.update((sessions) => {
-      const session = this.decidable(sessions, token, sender);
-      if (!session?.rpId) return undefined;
-      this.excluding.add(session.id);
-      return { id: session.id, rpId: session.rpId };
-    });
+    const failed = {
+      success: false,
+      code: EXCLUDE_FAILED,
+      error: 'The setting could not be saved',
+    };
+    let marked: string | undefined;
+    let claimed: { id: string; rpId: string } | undefined;
+    try {
+      claimed = await this.update((sessions) => {
+        const session = this.decidable(sessions, token, sender);
+        if (!session?.rpId) return undefined;
+        marked = session.id;
+        this.excluding.add(session.id);
+        return { id: session.id, rpId: session.rpId };
+      });
+    } catch (error) {
+      // The claim was not saved, and the session is as it was.
+      if (marked !== undefined) this.excluding.delete(marked);
+      console.warn('Could not save the excluded site', error);
+      return failed;
+    }
     if (!claimed) {
       return { success: false, error: 'This request is no longer active' };
     }
+    const { id, rpId } = claimed;
 
     try {
-      await this.deps.excludeSite(claimed.rpId);
+      await this.deps.excludeSite(rpId);
     } catch (error) {
-      this.excluding.delete(claimed.id);
+      this.excluding.delete(id);
       console.warn('Could not save the excluded site', error);
-      return { success: false, code: EXCLUDE_FAILED, error: 'The setting could not be saved' };
+      return failed;
     }
 
-    const ended = await this.update((sessions) => {
-      this.excluding.delete(claimed.id);
-      const session = sessions[claimed.id];
-      // Cancelled while the write ran (the page gave up, or the user closed
-      // the window): the exclusion stands, and the request stays ended.
-      if (!session || session.state !== 'pending') return undefined;
-      delete sessions[session.id];
-      return { ...session };
-    });
+    let ended: DialogSession | undefined;
+    let gone = false;
+    try {
+      ended = await this.update((sessions) => {
+        this.excluding.delete(id);
+        const session = sessions[id];
+        // Cancelled while the write ran (the page gave up, or the user closed
+        // the window): the exclusion stands, and the request stays ended.
+        if (!session || session.state !== 'pending') {
+          gone = true;
+          return undefined;
+        }
+        delete sessions[session.id];
+        return { ...session };
+      });
+    } catch (error) {
+      this.excluding.delete(id);
+      console.warn('Could not end the dialog after excluding the site', error);
+      return gone ? { success: true } : failed;
+    }
     if (ended) void this.ended(ended, 'excluded');
     return { success: true };
   }

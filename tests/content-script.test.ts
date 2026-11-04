@@ -613,8 +613,21 @@ describe('waiting for focus', () => {
     const wait = whenFocused(new AbortController().signal);
     expect(await over(wait)).toBe(false);
 
+    focused.mockReturnValue(true);
     window.dispatchEvent(new Event('focus'));
 
+    expect(await over(wait)).toBe(true);
+  });
+
+  it('goes on through a focus event the page dispatches without having focus', async () => {
+    const wait = whenFocused(new AbortController().signal);
+
+    window.dispatchEvent(new Event('focus'));
+
+    expect(await over(wait)).toBe(false);
+    // Focus that comes back after it still ends the wait.
+    focused.mockReturnValue(true);
+    window.dispatchEvent(new Event('focus'));
     expect(await over(wait)).toBe(true);
   });
 

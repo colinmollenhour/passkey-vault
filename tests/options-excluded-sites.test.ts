@@ -140,6 +140,33 @@ describe('options: sites where the vault is off', () => {
     expect(sent[0].sender.url).toBe(OPTIONS_PAGE.url);
   });
 
+  it('shows a change that arrives before the removal’s answer, not the older answer', async () => {
+    await openOptions({ [EXCLUDED_SITES_KEY]: ['login.example.com', 'shop.example'] });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const send = chrome.api.runtime.sendMessage;
+    const answer = jest
+      .spyOn(chrome.api.runtime, 'sendMessage')
+      .mockImplementation(async (message: unknown) => {
+        const response = await send(message);
+        await held;
+        return response;
+      });
+
+    removeButton('login.example.com').click();
+    await settle();
+    expect(chrome.local.data[EXCLUDED_SITES_KEY]).toEqual(['shop.example']);
+    // The vault dialog turns another site off before the answer arrives.
+    await new ExcludedSites().add('new.example');
+    await settle();
+    release();
+    await settle();
+    answer.mockRestore();
+
+    expect(listed()).toEqual(['shop.example', 'new.example']);
+    expect(window.alert).not.toHaveBeenCalled();
+  });
+
   it('keeps the site and says so when the background cannot remove it', async () => {
     await openOptions({ [EXCLUDED_SITES_KEY]: ['shop.example'] });
     chrome.faults.push({
