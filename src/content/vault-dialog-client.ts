@@ -32,6 +32,31 @@ export interface DialogRequest {
 
 type Send = (message: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
+/** How long a handoff from a dialog window waits for the page to get focus back. */
+export const HANDOFF_FOCUS_WAIT_MS = 1500;
+
+/**
+ * Resolve once this document has focus, or after `ms`, or when `signal`
+ * aborts. The browser refuses WebAuthn to a document without focus, and
+ * focus comes back to the page only after the dialog's window closes. A
+ * frame whose ancestors hold focus never has it itself, so the wait is
+ * bounded and the request goes on regardless.
+ */
+export function whenFocused(signal: AbortSignal, ms = HANDOFF_FOCUS_WAIT_MS): Promise<void> {
+  if (document.hasFocus() || signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      window.removeEventListener('focus', done);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    window.addEventListener('focus', done);
+    signal.addEventListener('abort', done);
+  });
+}
+
 export class VaultDialogClient {
   /** Dialogs on screen, by dialog ID. */
   private waiters = new Map<string, (outcome: VaultDialogOutcome) => void>();
@@ -84,6 +109,8 @@ export class VaultDialogClient {
 
     let frame: DialogFrame | null = null;
     let launcher: Launcher | null = null;
+    // Whether the dialog was in a window, which takes focus from the page.
+    let windowed = mode === 'window' && !deferWindow;
     const outcome = await new Promise<VaultDialogOutcome>((resolve) => {
       let settled = false;
       const settle = (value: VaultDialogOutcome) => {
@@ -113,6 +140,7 @@ export class VaultDialogClient {
           return;
         }
         // The dialog moved to a window: the frame goes, the wait goes on.
+        windowed = true;
         frame?.unmount();
         frame = null;
       });
@@ -129,6 +157,7 @@ export class VaultDialogClient {
         void launcher.choice.then((choice) => {
           launcher?.remove();
           if (choice === 'open') {
+            windowed = true;
             this.send({ type: DIALOG_MESSAGES.LAUNCH, requestId: request.requestId }).catch(() =>
               dismiss()
             );
@@ -142,6 +171,11 @@ export class VaultDialogClient {
     });
     (frame as DialogFrame | null)?.unmount();
     (launcher as Launcher | null)?.remove();
+    // The browser's own dialog comes next. The background closed the
+    // dialog's window before it told us; let focus come back to the page.
+    if ((outcome === 'passthrough' || outcome === 'excluded') && windowed) {
+      await whenFocused(signal);
+    }
     return { status: 'decided', outcome };
   }
 

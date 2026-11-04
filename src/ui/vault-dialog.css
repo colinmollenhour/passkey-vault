@@ -255,10 +255,46 @@ body {
   background: var(--bg-hover);
 }
 
+/*
+ * "Turn off on {rp}": a quiet full-width row under the buttons. One line,
+ * so the footer, and with it the frame, keeps one height; a long RP ID is
+ * cut short here and named in full in the message above and the tooltip.
+ */
+.btn-link {
+  display: block;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 14px;
+  text-decoration: underline;
+  text-transform: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-link:hover {
+  color: var(--text);
+}
+
 .btn[aria-disabled='true'],
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.card-error {
+  display: block;
+  margin-top: 2px;
+  color: #cf222e;
+}
+
+html[data-theme='dark'] .card-error {
+  color: #ff7b72;
 }
 
 /*

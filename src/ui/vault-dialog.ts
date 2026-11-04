@@ -12,6 +12,7 @@ import { initTheme } from '../theme';
 import {
   DIALOG_MESSAGES,
   DIALOG_TOKEN_MESSAGE,
+  EXCLUDE_FAILED,
   type VaultDialogDecision,
   type VaultDialogMode,
   type VaultDialogView,
@@ -146,7 +147,8 @@ export class VaultDialog {
             if (this.selectedId) this.decide({ action: 'use', id: this.selectedId });
           },
           true
-        )
+        ),
+        this.excludeButton(view.rpId)
       );
     } else {
       // The account the passkey is for, where the picker lists passkeys:
@@ -159,17 +161,25 @@ export class VaultDialog {
         user: view.userName || t('commonUnknownUser'),
         rp: view.rpId,
       });
+      // The same layout as the picker's: the two ways out side by side,
+      // the confirmation below them. "Use another device" hands this one
+      // request to the browser's own dialog (a security key, a phone),
+      // which asks for its own consent, so it needs none here.
       footer.append(
         this.button('pkv-cancel', t('commonCancel'), 'secondary', () =>
           this.decide({ action: 'cancel' })
         ),
+        this.button('pkv-passthrough', t('pageUseAnotherDevice'), 'secondary', () =>
+          this.decide({ action: 'passthrough' })
+        ),
         this.button(
           'pkv-create',
           t('pageCreate'),
-          'primary',
+          'primary wide',
           () => this.decide({ action: 'create' }),
           true
-        )
+        ),
+        this.excludeButton(view.rpId)
       );
     }
 
@@ -180,17 +190,55 @@ export class VaultDialog {
     card.hidden = false;
     this.mode = view.mode;
     this.doc.documentElement.classList.toggle('in-window', view.mode === 'window');
-    this.gate = this.env.createGate(card, {
-      mode: view.mode,
+    this.armGate();
+    this.focusStart();
+  }
+
+  /**
+   * Open a new consent gate: consent buttons count only once it says the
+   * dialog has been on screen long enough, from now.
+   */
+  private armGate(): void {
+    this.gate?.dispose();
+    const gate = this.env.createGate(this.el('card'), {
+      mode: this.mode,
       reference: () => this.reference(),
       fits: () => this.fits(),
     });
-    this.gate.onChange(() => this.updateConsentButtons());
+    this.gate = gate;
+    gate.onChange(() => {
+      if (this.gate === gate) this.updateConsentButtons();
+    });
     this.updateConsentButtons();
-    // Focus the selection, or the dialog itself: never a consent button, so
-    // a keystroke meant for the page cannot confirm.
-    const checked = list.querySelector<HTMLElement>('[aria-checked="true"]');
-    (checked ?? card).focus({ preventScroll: true });
+  }
+
+  /**
+   * Focus the selection, or the dialog itself: never a consent button, so
+   * a keystroke meant for the page cannot confirm.
+   */
+  private focusStart(): void {
+    const checked = this.el('passkeys').querySelector<HTMLElement>('[aria-checked="true"]');
+    (checked ?? this.el('card')).focus({ preventScroll: true });
+  }
+
+  /**
+   * "Turn off on {rp}": a persistent change to the user's settings, so it
+   * is a consent button like Create and Continue, and it sits in the
+   * footer, which the gate checks is in view. The decision names no site;
+   * the background excludes the RP ID of this dialog's session.
+   */
+  private excludeButton(rpId: string): HTMLButtonElement {
+    const button = this.button(
+      'pkv-exclude',
+      t('dialogExcludeSite', { rp: rpId }),
+      'link wide',
+      () => this.decide({ action: 'exclude-site' }),
+      true
+    );
+    // The label can be cut short for a long RP ID; the tooltip has all of
+    // it, and what turning it off means.
+    button.title = `${t('dialogExcludeSite', { rp: rpId })}\n${t('dialogExcludeSiteHint', { rp: rpId })}`;
+    return button;
   }
 
   /** A read-only row like a picker entry: the new passkey's account and site. */
@@ -410,22 +458,45 @@ export class VaultDialog {
     this.settled = true;
     this.updateConsentButtons();
     this.gate?.dispose();
-    let response: { success?: boolean } | undefined;
+    let response: { success?: boolean; code?: unknown } | undefined;
     try {
       response = (await this.env.send({
         type: DIALOG_MESSAGES.DECIDE,
         token: this.token,
         decision,
-      })) as { success?: boolean } | undefined;
+      })) as { success?: boolean; code?: unknown } | undefined;
     } catch {
       response = undefined;
     }
     if (!response?.success) {
+      if (decision.action === 'exclude-site' && response?.code === EXCLUDE_FAILED) {
+        this.showExcludeFailed();
+        return;
+      }
       this.showInactive();
       return;
     }
     // The background closes the window too; this is in case it cannot.
     if (this.env.inWindow) this.env.window.close();
+  }
+
+  /**
+   * The exclusion was not saved, and the request is still open: say so
+   * and let the user decide again. The status row is the window offer's,
+   * so the error goes under the message. Consent starts over: the gate
+   * waits again before any consent click counts.
+   */
+  private showExcludeFailed(): void {
+    const subtitle = this.el('subtitle');
+    subtitle.querySelector('.card-error')?.remove();
+    const error = this.doc.createElement('span');
+    error.className = 'card-error';
+    error.setAttribute('role', 'alert');
+    error.textContent = t('dialogExcludeFailed');
+    subtitle.append(error);
+    this.settled = false;
+    this.armGate();
+    this.focusStart();
   }
 
   /** The request is gone: the page gave up, or another dialog replaced this one. */

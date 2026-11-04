@@ -48,7 +48,9 @@ function openGate(): ConsentGate {
 async function show(
   view: VaultDialogView | null,
   gate: (card: HTMLElement, context: GateContext) => ConsentGate = openGate,
-  inWindow = false
+  inWindow = false,
+  /** The background's answer to a decision. */
+  answer: (decision: Record<string, unknown>) => unknown = () => ({ success: true })
 ): Promise<jest.Mock> {
   document.documentElement.innerHTML = HTML.replace(/^<!doctype html>/i, '');
   const send = jest.fn(async (message: Record<string, unknown>) => {
@@ -56,6 +58,9 @@ async function show(
       return view ? { success: true, view } : { success: false };
     }
     if (message.type === 'PASSKEY_DIALOG_METRICS') return { success: true, dpr: 2 };
+    if (message.type === 'PASSKEY_DIALOG_DECIDE') {
+      return answer(message.decision as Record<string, unknown>);
+    }
     return { success: true };
   });
   const dialog = new VaultDialog({
@@ -166,28 +171,38 @@ describe('the passkey picker', () => {
   });
 });
 
-describe('consent while the dialog cannot show it is visible', () => {
-  /** A gate the test opens and closes, as the browser's visibility reports would. */
-  function heldGate() {
-    let ready = false;
-    let listener = () => undefined as void;
-    let context: GateContext | undefined;
-    const factory = (_card: HTMLElement, given: GateContext): ConsentGate => {
-      context = given;
-      return {
-        isReady: () => ready,
-        onChange: (callback) => (listener = callback),
-        refresh: () => undefined,
-        dispose: () => undefined,
-      };
+/**
+ * A gate the test opens and closes, as the browser's visibility reports
+ * would. Each gate the dialog creates starts closed; `set` drives the
+ * latest one.
+ */
+function heldGate() {
+  let ready = false;
+  let listener = () => undefined as void;
+  let context: GateContext | undefined;
+  let created = 0;
+  const factory = (_card: HTMLElement, given: GateContext): ConsentGate => {
+    context = given;
+    created += 1;
+    ready = false;
+    let disposed = false;
+    return {
+      isReady: () => ready && !disposed,
+      onChange: (callback) => (listener = callback),
+      refresh: () => undefined,
+      dispose: () => {
+        disposed = true;
+      },
     };
-    const set = (value: boolean) => {
-      ready = value;
-      listener();
-    };
-    return { factory, set, context: () => context! };
-  }
+  };
+  const set = (value: boolean) => {
+    ready = value;
+    listener();
+  };
+  return { factory, set, context: () => context!, created: () => created };
+}
 
+describe('consent while the dialog cannot show it is visible', () => {
   afterEach(() => jest.useRealTimers());
 
   it('ignores Continue until the gate opens, and says so to assistive tech', async () => {
@@ -300,6 +315,139 @@ describe('the create confirmation', () => {
     await show(CREATE_VIEW);
 
     expect(document.activeElement).toBe(byId('card'));
+  });
+
+  it('offers Cancel and another device, then Create, then turning the vault off here', async () => {
+    await show(CREATE_VIEW);
+
+    const buttons = Array.from(byId('footer').querySelectorAll('button'));
+    expect(buttons.map((button) => button.id)).toEqual([
+      'pkv-cancel',
+      'pkv-passthrough',
+      'pkv-create',
+      'pkv-exclude',
+    ]);
+    expect(byId('pkv-passthrough').textContent).toBe('Use another device');
+    expect(byId('pkv-create').classList.contains('wide')).toBe(true);
+    expect(byId('pkv-exclude').classList.contains('wide')).toBe(true);
+    expect(byId('pkv-exclude').textContent).toContain('bank.example');
+  });
+
+  it('hands the request to the browser on "Use another device", gate or no gate', async () => {
+    const gate = heldGate();
+    const send = await show(CREATE_VIEW, gate.factory);
+
+    trustedClick(byId('pkv-passthrough'));
+    await flush();
+
+    expect(decisions(send).map((message) => message.decision)).toEqual([{ action: 'passthrough' }]);
+  });
+
+  it('ignores a "Use another device" click that script made up', async () => {
+    const send = await show(CREATE_VIEW);
+
+    byId('pkv-passthrough').click();
+    await flush();
+
+    expect(decisions(send)).toEqual([]);
+  });
+});
+
+describe('turning the vault off for a site', () => {
+  const failed = { success: false, code: 'EXCLUDE_FAILED', error: 'Not saved' };
+
+  it.each([
+    ['create confirmation', CREATE_VIEW],
+    ['passkey picker', GET_VIEW],
+  ])('is offered in the %s, naming the site', async (_label, view) => {
+    await show(view);
+
+    const button = byId('pkv-exclude');
+    expect(button.parentElement).toBe(byId('footer'));
+    expect(button.textContent).toBe('Turn off on bank.example');
+    expect(button.title).toContain('bank.example');
+  });
+
+  it('counts only once the gate opens, like any consent', async () => {
+    const gate = heldGate();
+    const send = await show(CREATE_VIEW, gate.factory);
+
+    expect(byId('pkv-exclude').getAttribute('aria-disabled')).toBe('true');
+    trustedClick(byId('pkv-exclude'));
+    await flush();
+    expect(decisions(send)).toEqual([]);
+
+    gate.set(true);
+    trustedClick(byId('pkv-exclude'));
+    await flush();
+    // The decision names no site: the background uses the session's.
+    expect(decisions(send).map((message) => message.decision)).toEqual([
+      { action: 'exclude-site' },
+    ]);
+  });
+
+  it('ignores a click that script made up', async () => {
+    const send = await show(GET_VIEW);
+
+    byId('pkv-exclude').click();
+    byId('pkv-exclude').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flush();
+
+    expect(decisions(send)).toEqual([]);
+  });
+
+  it('says so when the setting was not saved, and lets the user choose again', async () => {
+    const gate = heldGate();
+    const send = await show(CREATE_VIEW, gate.factory, false, (decision) =>
+      decision.action === 'exclude-site' ? failed : { success: true }
+    );
+    gate.set(true);
+    trustedClick(byId('pkv-exclude'));
+    await flush();
+
+    const error = byId('subtitle').querySelector('.card-error')!;
+    expect(error.textContent).toBe("Couldn't save that setting. Try again, or use another device.");
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(byId('subtitle').textContent).toContain('bank.example');
+    expect(byId('status').hidden).toBe(true);
+    // Consent starts over with a new gate.
+    expect(gate.created()).toBe(2);
+    expect(byId('pkv-create').getAttribute('aria-disabled')).toBe('true');
+    trustedClick(byId('pkv-create'));
+    await flush();
+    expect(decisions(send)).toHaveLength(1);
+
+    trustedClick(byId('pkv-passthrough'));
+    await flush();
+    expect(decisions(send).map((message) => message.decision)).toEqual([
+      { action: 'exclude-site' },
+      { action: 'passthrough' },
+    ]);
+  });
+
+  it('can be tried again after a failure, showing one error at a time', async () => {
+    const gate = heldGate();
+    const send = await show(GET_VIEW, gate.factory, false, () => failed);
+    gate.set(true);
+    trustedClick(byId('pkv-exclude'));
+    await flush();
+    gate.set(true);
+    trustedClick(byId('pkv-exclude'));
+    await flush();
+
+    expect(decisions(send)).toHaveLength(2);
+    expect(byId('subtitle').querySelectorAll('.card-error')).toHaveLength(1);
+    expect(byId('footer').querySelectorAll('button')).toHaveLength(4);
+  });
+
+  it('treats any other refusal as a request that is gone', async () => {
+    await show(CREATE_VIEW, openGate, false, () => ({ success: false, error: 'gone' }));
+
+    trustedClick(byId('pkv-exclude'));
+    await flush();
+
+    expect(byId('subtitle').textContent).toBe('This request is no longer active.');
+    expect(byId('footer').querySelectorAll('button')).toHaveLength(0);
   });
 });
 

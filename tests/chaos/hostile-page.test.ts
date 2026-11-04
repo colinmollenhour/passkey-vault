@@ -234,6 +234,64 @@ describe('a compromised renderer impersonating the content script', () => {
     expect(await vault.passkeys()).toHaveLength(1);
   });
 
+  describe('and the vault’s "Turn off on this site"', () => {
+    const publicKey = {
+      rp: { name: 'Evil', id: 'evil.example' },
+      user: { id: 'AQ', name: 'me', displayName: 'Me' },
+      challenge: b64url(new Uint8Array(32)),
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+    };
+    const openDialog = (rp = publicKey.rp) =>
+      vault.send(
+        {
+          type: 'PASSKEY_DIALOG_OPEN',
+          requestId: 'r',
+          payload: { kind: 'create', publicKey: { ...publicKey, rp } },
+        },
+        EVIL_PAGE
+      ) as Promise<any>;
+
+    it('cannot decide it as its content script', async () => {
+      const opened = await openDialog();
+
+      const response: any = await vault.send(
+        {
+          type: 'PASSKEY_DIALOG_DECIDE',
+          token: opened.token,
+          decision: { action: 'exclude-site' },
+        },
+        EVIL_PAGE
+      );
+
+      expect(response?.success).not.toBe(true);
+      expect(vault.storage.excluded_sites).toBeUndefined();
+    });
+
+    it('cannot open a dialog that would turn the vault off for another site', async () => {
+      const opened = await openDialog({ name: 'Bank', id: 'bank.example' });
+
+      expect(opened?.success).not.toBe(true);
+      expect(opened?.token).toBeUndefined();
+    });
+
+    it('turns off only the site the request was for, whatever the decision names', async () => {
+      const opened = await openDialog();
+      const dialog = { ...dialogSender(77), tab: EVIL_PAGE.tab };
+      await vault.send({ type: 'PASSKEY_DIALOG_ATTACH', token: opened.token }, dialog);
+
+      await vault.send(
+        {
+          type: 'PASSKEY_DIALOG_DECIDE',
+          token: opened.token,
+          decision: { action: 'exclude-site', rpId: 'bank.example', site: 'bank.example' },
+        },
+        dialog
+      );
+
+      expect(vault.storage.excluded_sites).toEqual(['evil.example']);
+    });
+  });
+
   it('still lets the extension pages do all of this', async () => {
     const exported: any = await vault.send({ type: 'EXPORT_VAULT' }, EXTENSION_PAGE);
 

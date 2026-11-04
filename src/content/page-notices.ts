@@ -1,6 +1,6 @@
 /**
- * The vault's notices on a web page: "passkey created", "signed in", and
- * errors.
+ * The vault's notices on a web page: "passkey created", "signed in",
+ * errors, and neutral information ("Fenko Vault is off for this site").
  *
  * They are drawn by the content script into a closed shadow root, in the
  * top layer where the browser has it, and never take a click. They carry
@@ -15,7 +15,9 @@
 import { t } from '../i18n';
 import { getStoredTheme, resolveTheme } from '../theme';
 
-type NoticeKind = 'success' | 'error';
+type NoticeKind = 'success' | 'error' | 'info';
+
+const ICONS: Record<NoticeKind, string> = { success: '✓', error: '✗', info: 'ℹ' };
 
 const STYLES = `
   :host {
@@ -59,6 +61,7 @@ const STYLES = `
   .message { font-size: 13px; opacity: 0.9; overflow-wrap: anywhere; }
   .success { background: #dafbe1; border-color: rgba(26, 127, 55, 0.28); color: #1a7f37; }
   .error { background: #ffebe9; border-color: rgba(207, 34, 46, 0.28); color: #cf222e; }
+  .info { background: #f6f8fa; border-color: #d1d9e0; color: #1f2328; }
   :host([data-theme='dark']) .toast { background: #161b22; border-color: #30363d; color: #e6edf3; }
 `;
 
@@ -78,7 +81,7 @@ async function show(title: string, message: string, kind: NoticeKind, duration: 
   toast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
   const icon = document.createElement('div');
   icon.className = 'icon';
-  icon.textContent = kind === 'success' ? '✓' : '✗';
+  icon.textContent = ICONS[kind];
   const content = document.createElement('div');
   const heading = document.createElement('div');
   heading.className = 'title';
@@ -128,4 +131,9 @@ export function showPasskeyUsedNotification(rpId: string): void {
 
 export function showErrorNotification(title: string, message: string): void {
   void show(title, message, 'error', 5000);
+}
+
+/** Something the user did took effect, neither a success nor a failure. */
+export function showInfoNotification(title: string, message: string): void {
+  void show(title, message, 'info', 6000);
 }

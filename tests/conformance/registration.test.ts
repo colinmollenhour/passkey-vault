@@ -19,7 +19,13 @@ import {
   FLAG_UV,
   parseAuthenticatorData,
 } from '../helpers/rp-verifier';
-import { creationOptionsFromJSON, random, registrationJSON } from '../helpers/options';
+import {
+  authenticationJSON,
+  creationOptionsFromJSON,
+  random,
+  registrationJSON,
+  requestOptionsFromJSON,
+} from '../helpers/options';
 
 const vault = setupVault('https://example.com/login');
 
@@ -247,6 +253,95 @@ describe('Advanced ceremony settings', () => {
 
     expect(credential.authenticatorAttachment).toBe(attachment);
     expect(credential.response.getTransports()).toEqual(transports);
+  });
+});
+
+describe('leaving a registration to the browser', () => {
+  /** A site that asks for a security key, as KMO does. */
+  const securityKeyOptions = (signal?: AbortSignal): CredentialCreationOptions => ({
+    publicKey: creationOptionsFromJSON(
+      registrationJSON({
+        rp: { name: 'Example', id: 'example.com' },
+        authenticatorSelection: {
+          authenticatorAttachment: 'cross-platform',
+          residentKey: 'discouraged',
+          userVerification: 'preferred',
+        },
+        hints: ['security-key'],
+      })
+    ),
+    ...(signal && { signal }),
+  });
+
+  const sessions = () =>
+    Object.values(
+      (vault.chrome.sessionArea.data.vault_dialog_sessions as Record<string, unknown>) ?? {}
+    );
+
+  it('gives a security-key registration to the browser on "Use another device"', async () => {
+    vault.user.confirmCreate.mockReturnValue('passthrough');
+    vault.native.create.mockResolvedValue({ id: 'yubikey' });
+    const options = securityKeyOptions(new AbortController().signal);
+
+    const credential = await navigator.credentials.create(options);
+    await vault.settle();
+
+    expect(credential).toEqual({ id: 'yubikey' });
+    // The browser gets the page's own options and signal, once.
+    expect(vault.native.create).toHaveBeenCalledTimes(1);
+    expect(vault.native.create.mock.calls[0][0]).toBe(options);
+    expect(await vault.passkeys()).toEqual([]);
+    // Nothing is left that a CREATE_PASSKEY for this request could use.
+    expect(sessions()).toEqual([]);
+    const sent = vault.chrome.sentToBackground.map(({ message }) => message.type);
+    expect(sent).not.toContain('CREATE_PASSKEY');
+    expect(vault.storage.excluded_sites).toBeUndefined();
+  });
+
+  it('turns the vault off for the site, and leaves this and every later request to the browser', async () => {
+    // A user in mode "all" with a list left over from another mode: that
+    // list stays inactive.
+    await vault.reset({ domain_rules: { mode: 'all', domains: ['other.example'] } });
+    vault.goto('https://example.com/login');
+    vault.user.confirmCreate.mockReturnValue('exclude-site');
+    vault.native.create.mockResolvedValue({ id: 'browser' });
+    vault.native.get.mockResolvedValue({ id: 'browser-sign-in' });
+
+    const first = await navigator.credentials.create(securityKeyOptions());
+    await vault.settle();
+
+    expect(first).toEqual({ id: 'browser' });
+    expect(vault.native.create).toHaveBeenCalledTimes(1);
+    expect(vault.storage.excluded_sites).toEqual(['example.com']);
+    expect(vault.storage.domain_rules).toEqual({ mode: 'all', domains: ['other.example'] });
+    expect(vault.user.infoToast).toHaveBeenCalledWith(
+      'Fenko Vault is off for example.com',
+      expect.any(String)
+    );
+    expect(await vault.passkeys()).toEqual([]);
+
+    const second = await navigator.credentials.create(securityKeyOptions());
+    const signIn = await navigator.credentials.get({
+      publicKey: requestOptionsFromJSON(authenticationJSON({ rpId: 'example.com' })),
+    });
+
+    expect(second).toEqual({ id: 'browser' });
+    expect(signIn).toEqual({ id: 'browser-sign-in' });
+    expect(vault.native.create).toHaveBeenCalledTimes(2);
+    expect(vault.native.get).toHaveBeenCalledTimes(1);
+    expect(vault.user.confirmCreate).toHaveBeenCalledTimes(1);
+    expect(vault.dialogs).toHaveLength(1);
+  });
+
+  it('keeps handling other sites', async () => {
+    vault.user.confirmCreate.mockReturnValueOnce('exclude-site');
+    vault.native.create.mockResolvedValue({ id: 'browser' });
+    await navigator.credentials.create(securityKeyOptions());
+
+    vault.goto('https://www.example.org/');
+    const { record } = await register({ rp: { name: 'Org', id: 'example.org' } });
+
+    expect((await vault.passkeys()).map((passkey) => passkey.credentialId)).toEqual([record.id]);
   });
 });
 

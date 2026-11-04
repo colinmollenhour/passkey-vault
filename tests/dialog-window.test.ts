@@ -150,4 +150,70 @@ describe('registration with the dialog in a window', () => {
     expect(error?.name).toBe('NotAllowedError');
     expect(await vault.passkeys()).toEqual([]);
   });
+
+  const create = () =>
+    outcome(
+      navigator.credentials.create({
+        publicKey: creationOptionsFromJSON(
+          registrationJSON({ rp: { name: 'Example', id: 'example.com' } })
+        ),
+      })
+    );
+
+  /**
+   * The browser's own prompt, which works only for a page with focus: the
+   * window must be gone, and the page focused, by the time it is called.
+   */
+  function browserPrompt(id: string) {
+    const seen: Array<{ windowsOpen: boolean; focused: boolean }> = [];
+    vault.native.create.mockImplementation(async () => {
+      seen.push({
+        windowsOpen: vault.chrome.windows.some((candidate) => candidate.open),
+        focused: document.hasFocus(),
+      });
+      return { id };
+    });
+    return seen;
+  }
+
+  it('hands the request to the browser on "Use another device", once the window is gone', async () => {
+    vault.user.confirmCreate.mockReturnValue('passthrough');
+    const seen = browserPrompt('security-key');
+
+    const { value } = await create();
+
+    expect((value as any)?.id).toBe('security-key');
+    expect(seen).toEqual([{ windowsOpen: false, focused: true }]);
+    expect(await vault.passkeys()).toEqual([]);
+  });
+
+  it('turns the vault off for the site and hands the request to the browser', async () => {
+    vault.user.confirmCreate.mockReturnValue('exclude-site');
+    const seen = browserPrompt('browser');
+
+    const { value } = await create();
+    const again = await create();
+
+    expect((value as any)?.id).toBe('browser');
+    expect((again.value as any)?.id).toBe('browser');
+    expect(seen[0]).toEqual({ windowsOpen: false, focused: true });
+    expect(vault.native.create).toHaveBeenCalledTimes(2);
+    expect(vault.storage.excluded_sites).toEqual(['example.com']);
+    expect(vault.dialogs).toHaveLength(1);
+  });
+});
+
+describe('a sign-in in a window, left to the browser', () => {
+  it('turns the vault off for the site from the picker', async () => {
+    await register();
+    vault.user.choosePasskey.mockReturnValue({ action: 'exclude-site' });
+    vault.native.get.mockResolvedValue({ id: 'browser' });
+
+    const { value } = await signIn();
+
+    expect((value as any)?.id).toBe('browser');
+    expect(vault.native.get).toHaveBeenCalledTimes(1);
+    expect(vault.storage.excluded_sites).toEqual(['example.com']);
+    expect(vault.chrome.windows.every((window) => !window.open)).toBe(true);
+  });
 });

@@ -21,6 +21,7 @@ import { arrayBufferToBase64URL } from '../utils/base64';
 import {
   DIALOG_MESSAGES,
   DIALOG_WINDOW_SIZE,
+  EXCLUDE_FAILED,
   VAULT_DIALOG_PAGE,
   isVaultDialogSender,
   type VaultDialogDecision,
@@ -96,6 +97,12 @@ export interface DialogBrokerDeps {
       user?: { name?: string; displayName?: string };
     }>
   >;
+  /**
+   * Keep the vault out of an RP ID from now on (excluded_sites). Rejects
+   * when the setting could not be saved. Called only with a session's own
+   * RP ID, never one a message names; works while the vault is locked.
+   */
+  excludeSite(rpId: string): Promise<void>;
 }
 
 const STORAGE_KEY = 'vault_dialog_sessions';
@@ -133,6 +140,13 @@ export class DialogBroker {
 
   /** Windows being opened; a claim from one waits until its IDs are known. */
   private opening = new Set<Promise<void>>();
+
+  /**
+   * Sessions whose exclusion is being saved; they take no other decision
+   * meanwhile. Kept in memory, not with the session: a worker that stops
+   * mid-write leaves the session free to decide again, not stuck.
+   */
+  private excluding = new Set<string>();
 
   constructor(private readonly deps: DialogBrokerDeps) {
     // Closing the dialog's window is the user saying no.
@@ -253,7 +267,7 @@ export class DialogBroker {
       sessions[session.id] = session;
       return previous;
     });
-    for (const other of replaced) this.ended(other, 'cancel');
+    for (const other of replaced) void this.ended(other, 'cancel');
     if (mode === 'window') {
       if (!session.window?.deferred) await this.openWindow(session.id);
       // The token is for the window the background opens, not the page.
@@ -392,11 +406,10 @@ export class DialogBroker {
     sender: DialogSender,
     decision: VaultDialogDecision | undefined
   ): Promise<unknown> {
+    if (decision?.action === 'exclude-site') return this.exclude(token, sender);
     const decided = await this.update((sessions) => {
-      const session = Object.values(sessions).find((candidate) => candidate.token === token);
-      if (!session || !token || session.state !== 'pending' || !this.isClaimant(session, sender)) {
-        return undefined;
-      }
+      const session = this.decidable(sessions, token, sender);
+      if (!session) return undefined;
       const outcome = this.apply(session, decision);
       if (!outcome) return undefined;
       if (outcome === 'approved') {
@@ -410,7 +423,75 @@ export class DialogBroker {
     if (!decided) {
       return { success: false, error: 'This request is no longer active' };
     }
-    this.ended(decided.session, decided.outcome);
+    void this.ended(decided.session, decided.outcome);
+    return { success: true };
+  }
+
+  /** The pending session `token` names, if `sender` claimed it and may decide now. */
+  private decidable(
+    sessions: Record<string, DialogSession>,
+    token: string,
+    sender: DialogSender
+  ): DialogSession | undefined {
+    const session = Object.values(sessions).find((candidate) => candidate.token === token);
+    if (
+      !session ||
+      !token ||
+      session.state !== 'pending' ||
+      this.excluding.has(session.id) ||
+      !this.isClaimant(session, sender)
+    ) {
+      return undefined;
+    }
+    return session;
+  }
+
+  /**
+   * "Turn off on this site": save the exclusion, then end the dialog with
+   * it. The RP ID saved is the session's, which the background bound to
+   * the requesting frame and checked when the session opened; the dialog's
+   * message names no site. Together with the consent gate on the button,
+   * that keeps a page from turning the vault off for a site by tricking a
+   * click or by forging the request. It is no defence against a
+   * compromised renderer, whose content script can write extension
+   * storage itself.
+   *
+   * The write happens outside the session queue, so a slow storage write
+   * holds up no other dialog; the session is marked meanwhile and takes no
+   * other decision. If the write fails, the dialog stays open and the user
+   * can try again or choose something else. Only requests that check the
+   * settings after the write are affected: another dialog already open for
+   * the site keeps going.
+   */
+  private async exclude(token: string, sender: DialogSender): Promise<unknown> {
+    const claimed = await this.update((sessions) => {
+      const session = this.decidable(sessions, token, sender);
+      if (!session?.rpId) return undefined;
+      this.excluding.add(session.id);
+      return { id: session.id, rpId: session.rpId };
+    });
+    if (!claimed) {
+      return { success: false, error: 'This request is no longer active' };
+    }
+
+    try {
+      await this.deps.excludeSite(claimed.rpId);
+    } catch (error) {
+      this.excluding.delete(claimed.id);
+      console.warn('Could not save the excluded site', error);
+      return { success: false, code: EXCLUDE_FAILED, error: 'The setting could not be saved' };
+    }
+
+    const ended = await this.update((sessions) => {
+      this.excluding.delete(claimed.id);
+      const session = sessions[claimed.id];
+      // Cancelled while the write ran (the page gave up, or the user closed
+      // the window): the exclusion stands, and the request stays ended.
+      if (!session || session.state !== 'pending') return undefined;
+      delete sessions[session.id];
+      return { ...session };
+    });
+    if (ended) void this.ended(ended, 'excluded');
     return { success: true };
   }
 
@@ -459,6 +540,7 @@ export class DialogBroker {
         !token ||
         session.state !== 'pending' ||
         session.view.mode !== 'frame' ||
+        this.excluding.has(session.id) ||
         !this.isClaimant(session, sender)
       ) {
         return undefined;
@@ -494,7 +576,8 @@ export class DialogBroker {
       case 'cancel':
         return 'cancel';
       case 'passthrough':
-        return session.kind === 'get' ? 'passthrough' : undefined;
+        // "Use other passkey" or "Use another device": the browser's own UI.
+        return 'passthrough';
       case 'use':
         if (session.kind !== 'get' || !session.passkeyIds.includes(decision.id)) return undefined;
         session.approvedPasskeyId = decision.id;
@@ -632,13 +715,23 @@ export class DialogBroker {
       for (const session of found) delete sessions[session.id];
       return found;
     });
-    for (const session of ended) this.ended(session, 'cancel');
+    for (const session of ended) void this.ended(session, 'cancel');
   }
 
   // ==================== HELPERS ====================
 
-  /** A dialog ended: close its window, and tell the content script. */
-  private ended(session: DialogSession, outcome: VaultDialogOutcome): void {
+  /**
+   * A dialog ended: close its window, and tell the content script. When
+   * the request goes on to the browser's own UI, the window is closed
+   * first: the browser refuses WebAuthn to a page whose window does not
+   * have focus, and the dialog's window has it until it is gone.
+   */
+  private async ended(session: DialogSession, outcome: VaultDialogOutcome): Promise<void> {
+    if (outcome === 'passthrough' || outcome === 'excluded') {
+      await this.closeWindow(session);
+      await this.notify(session, outcome);
+      return;
+    }
     void this.closeWindow(session);
     void this.notify(session, outcome);
   }
