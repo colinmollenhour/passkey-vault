@@ -262,6 +262,42 @@ describe('consent while the dialog cannot show it is visible', () => {
     expect(context!.fits()).toBe(true);
   });
 
+  describe('the row the decision is about', () => {
+    /** Lay out a box: jsdom lays nothing out itself. */
+    const place = (element: Element, top: number, bottom: number) => {
+      element.getBoundingClientRect = () =>
+        ({ top, bottom, left: 0, right: 100, width: 100, height: bottom - top }) as DOMRect;
+    };
+
+    it.each([
+      ["the new passkey's account", CREATE_VIEW, '.passkey-summary'],
+      ['the passkey selected', GET_VIEW, '[aria-checked="true"]'],
+    ])('does not fit while %s is cut by the body', async (_label, view, selector) => {
+      const gate = heldGate();
+      await show(view, gate.factory);
+      place(byId('body'), 100, 160);
+      const row = document.querySelector(selector)!;
+
+      place(row, 105, 155);
+      expect(gate.context().fits()).toBe(true);
+      place(row, 110, 170);
+      expect(gate.context().fits()).toBe(false);
+      place(row, 90, 140);
+      expect(gate.context().fits()).toBe(false);
+    });
+
+    it('goes by the passkey selected, not by others in the list', async () => {
+      const gate = heldGate();
+      await show(GET_VIEW, gate.factory);
+      place(byId('body'), 100, 160);
+      const [first, second] = Array.from(document.querySelectorAll('.passkey-item'));
+      place(first, 105, 135);
+      place(second, 140, 190);
+
+      expect(gate.context().fits()).toBe(true);
+    });
+  });
+
   it('measures itself against the top page through the background', async () => {
     const gate = heldGate();
     const send = await show(GET_VIEW, gate.factory);
@@ -405,10 +441,14 @@ describe('turning the vault off for a site', () => {
     trustedClick(byId('pkv-exclude'));
     await flush();
 
+    // The error takes the message's place, so the header keeps its height;
+    // the body's row still names the account and the site.
     const error = byId('subtitle').querySelector('.card-error')!;
     expect(error.textContent).toBe("Couldn't save that setting. Try again, or use another device.");
     expect(error.getAttribute('role')).toBe('alert');
-    expect(byId('subtitle').textContent).toContain('bank.example');
+    expect(byId('subtitle').textContent).toBe(error.textContent);
+    expect(byId('card').getAttribute('aria-describedby')).toBe('subtitle');
+    expect(document.querySelector('.passkey-summary')!.textContent).toBe('Carolbank.example');
     expect(byId('status').hidden).toBe(true);
     // Consent starts over with a new gate.
     expect(gate.created()).toBe(2);
@@ -437,6 +477,10 @@ describe('turning the vault off for a site', () => {
 
     expect(decisions(send)).toHaveLength(2);
     expect(byId('subtitle').querySelectorAll('.card-error')).toHaveLength(1);
+    expect(byId('subtitle').textContent).toBe(
+      "Couldn't save that setting. Try again, or use another device."
+    );
+    expect(document.querySelectorAll('.passkey-item')).toHaveLength(2);
     expect(byId('footer').querySelectorAll('button')).toHaveLength(4);
   });
 

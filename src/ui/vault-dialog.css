@@ -258,7 +258,8 @@ body {
 /*
  * "Turn off on {rp}": a quiet full-width row under the buttons. One line,
  * so the footer, and with it the frame, keeps one height; a long RP ID is
- * cut short here and named in full in the message above and the tooltip.
+ * cut short here and named in full in the tooltip, and in the message
+ * above or the create body's account row.
  */
 .btn-link {
   display: block;
@@ -287,9 +288,8 @@ body {
   cursor: not-allowed;
 }
 
+/* An error shown in the message's place, in its size and spacing. */
 .card-error {
-  display: block;
-  margin-top: 2px;
   color: #cf222e;
 }
 

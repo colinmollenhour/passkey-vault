@@ -48,13 +48,17 @@ it('shows a notice in a closed shadow root, themed without marking the page', as
 });
 
 it('shows neutral information as a status, not an alert', async () => {
-  showInfoNotification('Fenko Vault is off for bank.example', 'Turn it back on in Settings.');
+  showInfoNotification(
+    'Turned Off Here',
+    "Fenko Vault won't save or offer passkeys on bank.example. Turn it back on in Settings."
+  );
   await flush();
 
   const toast = roots[roots.length - 1].querySelector('.toast')!;
   expect(toast.classList.contains('info')).toBe(true);
   expect(toast.getAttribute('role')).toBe('status');
-  expect(toast.textContent).toContain('Fenko Vault is off for bank.example');
+  expect(toast.textContent).toContain('Turned Off Here');
+  expect(toast.textContent).toContain('passkeys on bank.example');
   expect(roots[roots.length - 1].querySelector('style')!.textContent).toContain('.info {');
   // One notice at a time: it replaced the error.
   expect(document.documentElement.querySelectorAll(':scope > div')).toHaveLength(1);

@@ -872,7 +872,7 @@ class ContentScript {
    * is page DOM, where a control would be one the page could click.
    */
   private siteExcluded(type: string, requestId: string, rpId: string): void {
-    _showInfoNotification(t('pageSiteExcludedTitle', { rp: rpId }), t('pageSiteExcludedMsg'));
+    _showInfoNotification(t('pageSiteExcludedTitle'), t('pageSiteExcludedMsg', { rp: rpId }));
     this.postPassthroughResponse(type, requestId, 'Site excluded');
   }
 

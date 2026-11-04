@@ -824,7 +824,9 @@ describe('the vault’s dialog hands a request to the browser', () => {
     expect(firstResult.ok).toBe(true);
     expect(aaguidOf(firstResult.json)).not.toBe(VAULT_AAGUID);
     expect(await excludedSites()).toEqual(['off.test']);
-    expect(await renderedText(page)).toContain('Fenko Vault is off for off.test');
+    const notice = await renderedText(page);
+    expect(notice).toContain('Turned Off Here');
+    expect(notice).toContain("Fenko Vault won't save or offer passkeys on off.test.");
 
     // The next request for the site never shows the vault's dialog.
     let sawDialog = false;

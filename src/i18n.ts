@@ -589,9 +589,9 @@ const en: TranslationMap = {
   dialogNotVisible: 'Cannot confirm this dialog is fully visible.',
   dialogOpenWindow: 'Open it in a window',
   pageUseAnotherDevice: 'Use another device',
-  pageSiteExcludedTitle: 'Fenko Vault is off for {rp}',
+  pageSiteExcludedTitle: 'Turned Off Here',
   pageSiteExcludedMsg:
-    "It won't save or offer passkeys here. Turn it back on in Settings > Interception.",
+    "Fenko Vault won't save or offer passkeys on {rp}. Turn it back on in Settings > Interception.",
   dialogExcludeSite: 'Turn off on {rp}',
   dialogExcludeSiteHint:
     "Fenko Vault won't save or offer passkeys on {rp}. Saved passkeys are kept.",
@@ -776,9 +776,9 @@ const ru: TranslationMap = {
     'Разблокируйте Fenko Vault на панели инструментов, чтобы войти с passkey из хранилища.',
   pageUseOtherPasskey: 'Другой passkey',
   pageUseAnotherDevice: 'Другое устройство',
-  pageSiteExcludedTitle: 'Fenko Vault отключён для {rp}',
+  pageSiteExcludedTitle: 'Отключено на этом сайте',
   pageSiteExcludedMsg:
-    'Он не будет сохранять и предлагать passkeys на этом сайте. Включить его снова можно в разделе Настройки > Перехват.',
+    'Fenko Vault не будет сохранять и предлагать passkeys на сайте {rp}. Включить его снова можно в разделе Настройки > Перехват.',
   dialogExcludeSite: 'Отключить на {rp}',
   dialogExcludeSiteHint:
     'Fenko Vault не будет сохранять и предлагать passkeys на {rp}. Сохранённые passkeys останутся.',
@@ -930,8 +930,9 @@ const zh_CN: TranslationMap = {
   pageVaultLockedMsg: '请从工具栏解锁 Fenko Vault，以使用保险库中的 passkey 登录。',
   pageUseOtherPasskey: '使用其他 passkey',
   pageUseAnotherDevice: '使用其他设备',
-  pageSiteExcludedTitle: 'Fenko Vault 已在 {rp} 上停用',
-  pageSiteExcludedMsg: '它不会在此网站保存或提供 passkey。可在“设置 > 拦截”中重新启用。',
+  pageSiteExcludedTitle: '已在此网站停用',
+  pageSiteExcludedMsg:
+    'Fenko Vault 不会在 {rp} 上保存或提供 passkey。可在“设置 > 拦截”中重新启用。',
   dialogExcludeSite: '在 {rp} 上停用',
   dialogExcludeSiteHint:
     'Fenko Vault 将不再在 {rp} 上保存或提供 passkey。已保存的 passkey 会保留。',
@@ -1084,9 +1085,9 @@ const ar: TranslationMap = {
   pageVaultLockedMsg: 'افتح قفل Fenko Vault من شريط الأدوات لتسجيل الدخول بمفتاح مرور من الخزنة.',
   pageUseOtherPasskey: 'استخدام مفتاح مرور آخر',
   pageUseAnotherDevice: 'استخدام جهاز آخر',
-  pageSiteExcludedTitle: 'Fenko Vault متوقف على {rp}',
+  pageSiteExcludedTitle: 'متوقف على هذا الموقع',
   pageSiteExcludedMsg:
-    'لن يحفظ مفاتيح المرور أو يعرضها هنا. يمكنك إعادة تشغيله من الإعدادات > الاعتراض.',
+    'لن يحفظ Fenko Vault مفاتيح المرور أو يعرضها على {rp}. يمكنك إعادة تشغيله من الإعدادات > الاعتراض.',
   dialogExcludeSite: 'إيقاف التشغيل على {rp}',
   dialogExcludeSiteHint:
     'لن يحفظ Fenko Vault مفاتيح المرور أو يعرضها على {rp}. تبقى مفاتيح المرور المحفوظة كما هي.',
@@ -1336,9 +1337,9 @@ const fa: TranslationMap = {
   pageContinue: 'ادامه',
   pageUseOtherPasskey: 'استفاده از کلید عبور دیگر',
   pageUseAnotherDevice: 'استفاده از دستگاه دیگر',
-  pageSiteExcludedTitle: 'Fenko Vault برای {rp} خاموش است',
+  pageSiteExcludedTitle: 'در این سایت خاموش است',
   pageSiteExcludedMsg:
-    'اینجا کلید عبور ذخیره یا پیشنهاد نمی‌کند. می‌توانید آن را از تنظیمات > رهگیری دوباره روشن کنید.',
+    'Fenko Vault در {rp} کلید عبور ذخیره یا پیشنهاد نمی‌کند. می‌توانید آن را از تنظیمات > رهگیری دوباره روشن کنید.',
   dialogExcludeSite: 'خاموش کردن در {rp}',
   dialogExcludeSiteHint:
     'Fenko Vault در {rp} کلید عبور ذخیره یا پیشنهاد نمی‌کند. کلیدهای عبور ذخیره‌شده حفظ می‌شوند.',
@@ -1489,9 +1490,9 @@ const es: TranslationMap = {
     'Desbloquea Fenko Vault desde la barra de herramientas para iniciar sesión con una passkey de la bóveda.',
   pageUseOtherPasskey: 'Usar otra passkey',
   pageUseAnotherDevice: 'Usar otro dispositivo',
-  pageSiteExcludedTitle: 'Fenko Vault está desactivado en {rp}',
+  pageSiteExcludedTitle: 'Desactivado en este sitio',
   pageSiteExcludedMsg:
-    'No guardará ni ofrecerá passkeys aquí. Vuelve a activarlo en Configuración > Intercepción.',
+    'Fenko Vault no guardará ni ofrecerá passkeys en {rp}. Vuelve a activarlo en Configuración > Intercepción.',
   dialogExcludeSite: 'Desactivar en {rp}',
   dialogExcludeSiteHint:
     'Fenko Vault no guardará ni ofrecerá passkeys en {rp}. Las passkeys guardadas se conservan.',
@@ -1650,9 +1651,9 @@ const fr: TranslationMap = {
     'Déverrouillez Fenko Vault depuis la barre d’outils pour vous connecter avec une passkey du coffre.',
   pageUseOtherPasskey: 'Utiliser une autre passkey',
   pageUseAnotherDevice: 'Utiliser un autre appareil',
-  pageSiteExcludedTitle: 'Fenko Vault est désactivé sur {rp}',
+  pageSiteExcludedTitle: 'Désactivé sur ce site',
   pageSiteExcludedMsg:
-    'Il n’enregistrera ni ne proposera de passkeys ici. Réactivez-le dans Paramètres > Interception.',
+    'Fenko Vault n’enregistrera ni ne proposera de passkeys sur {rp}. Réactivez-le dans Paramètres > Interception.',
   dialogExcludeSite: 'Désactiver sur {rp}',
   dialogExcludeSiteHint:
     'Fenko Vault n’enregistrera ni ne proposera de passkeys sur {rp}. Les passkeys enregistrées sont conservées.',

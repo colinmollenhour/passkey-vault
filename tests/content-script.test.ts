@@ -399,8 +399,8 @@ describe('content script: the vault dialog', () => {
 
     expect(await result).toMatchObject({ passthrough: true, error: 'Site excluded' });
     expect(ui.showInfoNotification).toHaveBeenCalledWith(
-      'Fenko Vault is off for localhost',
-      expect.stringContaining('Settings')
+      'Turned Off Here',
+      expect.stringContaining('passkeys on localhost.')
     );
     expect(sent().map((message) => message.type)).not.toContain('GET_PASSKEY');
   });
@@ -468,8 +468,8 @@ describe('content script: the create confirmation', () => {
     expect(await result).toMatchObject({ passthrough: true, error: 'Site excluded' });
     expect(sentTypes()).not.toContain('CREATE_PASSKEY');
     expect(ui.showInfoNotification).toHaveBeenCalledWith(
-      'Fenko Vault is off for localhost',
-      expect.stringContaining('Settings')
+      'Turned Off Here',
+      expect.stringContaining('passkeys on localhost.')
     );
   });
 

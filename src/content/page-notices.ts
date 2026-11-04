@@ -1,6 +1,6 @@
 /**
  * The vault's notices on a web page: "passkey created", "signed in",
- * errors, and neutral information ("Fenko Vault is off for this site").
+ * errors, and neutral information ("turned off here").
  *
  * They are drawn by the content script into a closed shadow root, in the
  * top layer where the browser has it, and never take a click. They carry

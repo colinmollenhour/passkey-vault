@@ -27,7 +27,8 @@ export interface GateContext {
   reference(): Promise<number | undefined>;
   /**
    * Whether the parts the user decides on are all inside the viewport:
-   * the title and message, the passkey selected, and the buttons. A frame
+   * the title and message, the passkey selected (or the new passkey's
+   * account), and the buttons. A frame
    * the page made too small to show them crops the dialog's content while
    * the dialog itself still "fits".
    */
@@ -426,7 +427,11 @@ export class VaultDialog {
       element.scrollHeight <= element.clientHeight + 1 &&
       element.scrollWidth <= element.clientWidth + 1;
     const body = this.el('body').getBoundingClientRect();
-    const selected = this.el('passkeys').querySelector('[aria-checked="true"]');
+    // The row the decision is about: the passkey picked, or the account
+    // a new passkey is for. Either must be in the body, not cut by it.
+    const passkeys = this.el('passkeys');
+    const selected =
+      passkeys.querySelector('[aria-checked="true"]') ?? passkeys.querySelector('.passkey-summary');
     const selectedShown =
       !selected ||
       (() => {
@@ -483,17 +488,18 @@ export class VaultDialog {
   /**
    * The exclusion was not saved, and the request is still open: say so
    * and let the user decide again. The status row is the window offer's,
-   * so the error goes under the message. Consent starts over: the gate
-   * waits again before any consent click counts.
+   * so the error takes the message's place: the header keeps its height
+   * and the body its row, which still names the account and the site.
+   * The message is the dialog's description, so that is the error now.
+   * Consent starts over: the gate waits again before any consent click
+   * counts.
    */
   private showExcludeFailed(): void {
-    const subtitle = this.el('subtitle');
-    subtitle.querySelector('.card-error')?.remove();
     const error = this.doc.createElement('span');
     error.className = 'card-error';
     error.setAttribute('role', 'alert');
     error.textContent = t('dialogExcludeFailed');
-    subtitle.append(error);
+    this.el('subtitle').replaceChildren(error);
     this.settled = false;
     this.armGate();
     this.focusStart();

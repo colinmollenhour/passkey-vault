@@ -315,8 +315,8 @@ describe('leaving a registration to the browser', () => {
     expect(vault.storage.excluded_sites).toEqual(['example.com']);
     expect(vault.storage.domain_rules).toEqual({ mode: 'all', domains: ['other.example'] });
     expect(vault.user.infoToast).toHaveBeenCalledWith(
-      'Fenko Vault is off for example.com',
-      expect.any(String)
+      'Turned Off Here',
+      expect.stringContaining('passkeys on example.com.')
     );
     expect(await vault.passkeys()).toEqual([]);
 
