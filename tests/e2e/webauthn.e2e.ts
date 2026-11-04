@@ -717,6 +717,150 @@ describe('a page attacking the vault’s dialog', () => {
 });
 
 /**
+ * The two ways out of the vault's create dialog that leave the request to
+ * the browser: "Use another device" for this one request, and "Turn off on
+ * {rp}" for every request for the site from now on. The browser's own
+ * WebAuthn answers, here from a CDP virtual authenticator on the page.
+ */
+describe('the vault’s dialog hands a request to the browser', () => {
+  let page: Page;
+  const worker = () => vault.serviceWorkers()[0];
+  const storedPasskeys = () =>
+    worker().evaluate(async () => {
+      const { passkeys = [] } = await chrome.storage.local.get('passkeys');
+      return passkeys.length as number;
+    });
+  const excludedSites = () =>
+    worker().evaluate(
+      async () => (await chrome.storage.local.get('excluded_sites')).excluded_sites ?? null
+    );
+
+  /**
+   * Every text on the page, closed shadow roots (the vault's notices)
+   * included. The CDP session stays attached until the page closes:
+   * detaching one drops the page's virtual authenticators.
+   */
+  async function renderedText(target: Page): Promise<string> {
+    const cdp = await target.context().newCDPSession(target);
+    const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
+    const texts: string[] = [];
+    const walk = (node: any) => {
+      if (node.nodeType === 3) texts.push(node.nodeValue);
+      for (const child of [
+        ...(node.children ?? []),
+        ...(node.shadowRoots ?? []),
+        ...(node.contentDocument ? [node.contentDocument] : []),
+      ]) {
+        walk(child);
+      }
+    };
+    walk(root);
+    return texts.join('\n');
+  }
+
+  /** What clientDataJSON says, for a credential from the browser's own client. */
+  const clientData = (json: any) =>
+    JSON.parse(Buffer.from(fromB64url(json.response.clientDataJSON)).toString());
+
+  afterEach(async () => {
+    await page?.close();
+  });
+
+  afterAll(async () => {
+    // Whatever a failed test left, later suites run with the vault on everywhere.
+    await worker().evaluate(() => chrome.storage.local.remove('excluded_sites'));
+  });
+
+  it('“Use another device” sends a security-key registration to the browser’s own WebAuthn', async () => {
+    page = await vault.newPage();
+    await page.goto('https://device.test/');
+    await addVirtualAuthenticator(page, 'usb');
+    const before = await storedPasskeys();
+    const json = creationJSON('device.test', {
+      authenticatorSelection: {
+        authenticatorAttachment: 'cross-platform',
+        residentKey: 'preferred',
+        userVerification: 'preferred',
+      },
+      hints: ['security-key'],
+    });
+
+    const pending = create(page, json, { click: false });
+    const frame = await dialogFrame(page);
+    // Not a consent button: it takes the click straight away.
+    await frame.locator('#pkv-passthrough').click();
+    const result = await pending;
+
+    expect(result).toMatchObject({ ok: true, checks: { isPublicKeyCredential: true } });
+    expect(aaguidOf(result.json)).not.toBe(VAULT_AAGUID);
+    // The page's own options reached the browser: a security key answered.
+    expect(result.json.authenticatorAttachment).toBe('cross-platform');
+    expect(result.checks!.transports).toContain('usb');
+    expect(clientData(result.json)).toMatchObject({
+      type: 'webauthn.create',
+      challenge: json.challenge,
+      origin: 'https://device.test',
+    });
+    expect(dialogOpen(page)).toBe(false);
+    expect(await storedPasskeys()).toBe(before);
+    expect(await excludedSites()).toBeNull();
+  });
+
+  it('“Turn off on {rp}” sends this and every later request for the site to the browser', async () => {
+    page = await vault.newPage();
+    await page.goto('https://off.test/');
+    await addVirtualAuthenticator(page);
+    const before = await storedPasskeys();
+
+    const first = create(page, creationJSON('off.test'), { click: false });
+    const frame = await dialogFrame(page);
+    expect((await frame.locator('#pkv-exclude').textContent())?.trim()).toBe(
+      'Turn off on off.test'
+    );
+    // A consent button: clickInDialog waits for the gate to take a click.
+    await clickInDialog(page, '#pkv-exclude');
+    const firstResult = await first;
+
+    expect(firstResult.ok).toBe(true);
+    expect(aaguidOf(firstResult.json)).not.toBe(VAULT_AAGUID);
+    expect(await excludedSites()).toEqual(['off.test']);
+    expect(await renderedText(page)).toContain('Fenko Vault is off for off.test');
+
+    // The next request for the site never shows the vault's dialog.
+    let sawDialog = false;
+    let settled = false;
+    const second = create(page, creationJSON('off.test'), { click: false }).finally(
+      () => (settled = true)
+    );
+    while (!settled) {
+      sawDialog ||= dialogOpen(page);
+      await page.waitForTimeout(25);
+    }
+    const secondResult = await second;
+
+    expect(sawDialog).toBe(false);
+    expect(secondResult.ok).toBe(true);
+    expect(aaguidOf(secondResult.json)).not.toBe(VAULT_AAGUID);
+    expect(await storedPasskeys()).toBe(before);
+
+    // Settings lists the site, and Remove turns the vault back on for it.
+    const options = await vault.newPage();
+    try {
+      await options.goto(`chrome-extension://${new URL(worker().url()).host}/options.html`);
+      await options.locator('.nav-item[data-section="interception"]').click();
+      const rows = options.locator('#excluded-sites-list .domain-item span');
+      await rows.first().waitFor();
+      expect(await rows.allTextContents()).toEqual(['off.test']);
+      await options.locator('#excluded-sites-list button[data-site="off.test"]').click();
+      await options.locator('#excluded-sites-empty').waitFor({ state: 'visible' });
+    } finally {
+      await options.close();
+    }
+    expect(await excludedSites()).toEqual([]);
+  });
+});
+
+/**
  * Each case runs in both browsers. Vault-browser pages also get a virtual
  * authenticator, so a request the vault hands to the browser is answered
  * the way it would be without the vault, rather than waiting for a
