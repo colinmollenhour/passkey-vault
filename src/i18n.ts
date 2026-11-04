@@ -264,6 +264,11 @@ const en: TranslationMap = {
   optionsBlockedDomains: 'Blocked Domains',
   optionsDomainPlaceholder: 'e.g. github.com',
   optionsNoDomains: 'No domains added yet.',
+  optionsExcludedSites: 'Sites where Fenko Vault is off',
+  optionsExcludedSitesDesc:
+    "Turned off from the vault's own dialog. Removing a site returns it to the interception mode above.",
+  optionsNoExcludedSites: 'No sites turned off.',
+  optionsExcludedSiteRemoveFailed: "Couldn't turn Fenko Vault back on for {rp}.",
   optionsSyncTitle: 'Sync Settings',
   optionsSyncDesc: 'Manage Nostr-based sync across your devices.',
   optionsSyncNotConfigured: 'Sync is not configured yet.',
@@ -583,6 +588,14 @@ const en: TranslationMap = {
   dialogInactive: 'This request is no longer active.',
   dialogNotVisible: 'Cannot confirm this dialog is fully visible.',
   dialogOpenWindow: 'Open it in a window',
+  pageUseAnotherDevice: 'Use another device',
+  pageSiteExcludedTitle: 'Fenko Vault is off for {rp}',
+  pageSiteExcludedMsg:
+    "It won't save or offer passkeys here. Turn it back on in Settings > Interception.",
+  dialogExcludeSite: 'Turn off on {rp}',
+  dialogExcludeSiteHint:
+    "Fenko Vault won't save or offer passkeys on {rp}. Saved passkeys are kept.",
+  dialogExcludeFailed: "Couldn't save that setting. Try again, or use another device.",
 };
 
 const ru: TranslationMap = {
@@ -761,6 +774,21 @@ const ru: TranslationMap = {
   pageNoPasskeysSite: 'Для этого сайта passkeys не найдены',
   pageVaultLockedMsg:
     'Разблокируйте Fenko Vault на панели инструментов, чтобы войти с passkey из хранилища.',
+  pageUseOtherPasskey: 'Другой passkey',
+  pageUseAnotherDevice: 'Другое устройство',
+  pageSiteExcludedTitle: 'Fenko Vault отключён для {rp}',
+  pageSiteExcludedMsg:
+    'Он не будет сохранять и предлагать passkeys на этом сайте. Включить его снова можно в разделе Настройки > Перехват.',
+  dialogExcludeSite: 'Отключить на {rp}',
+  dialogExcludeSiteHint:
+    'Fenko Vault не будет сохранять и предлагать passkeys на {rp}. Сохранённые passkeys останутся.',
+  dialogExcludeFailed:
+    'Не удалось сохранить настройку. Попробуйте ещё раз или используйте другое устройство.',
+  optionsExcludedSites: 'Сайты, где Fenko Vault отключён',
+  optionsExcludedSitesDesc:
+    'Отключены в диалоге самого хранилища. Удалённый из списка сайт снова следует режиму перехвата выше.',
+  optionsNoExcludedSites: 'Отключённых сайтов нет.',
+  optionsExcludedSiteRemoveFailed: 'Не удалось снова включить Fenko Vault для {rp}.',
 
   popupCopyDetails: 'Копировать данные',
   popupCopyWarnTitle: 'Скопировать данные ключа доступа?',
@@ -900,6 +928,19 @@ const zh_CN: TranslationMap = {
   pageContinue: '继续',
   pageNoPasskeysSite: '此网站没有 passkey',
   pageVaultLockedMsg: '请从工具栏解锁 Fenko Vault，以使用保险库中的 passkey 登录。',
+  pageUseOtherPasskey: '使用其他 passkey',
+  pageUseAnotherDevice: '使用其他设备',
+  pageSiteExcludedTitle: 'Fenko Vault 已在 {rp} 上停用',
+  pageSiteExcludedMsg: '它不会在此网站保存或提供 passkey。可在“设置 > 拦截”中重新启用。',
+  dialogExcludeSite: '在 {rp} 上停用',
+  dialogExcludeSiteHint:
+    'Fenko Vault 将不再在 {rp} 上保存或提供 passkey。已保存的 passkey 会保留。',
+  dialogExcludeFailed: '无法保存该设置。请重试，或使用其他设备。',
+  optionsExcludedSites: '已停用 Fenko Vault 的网站',
+  optionsExcludedSitesDesc:
+    '这些网站是在保险库自己的对话框中停用的。移除网站后，它将重新遵循上方的拦截模式。',
+  optionsNoExcludedSites: '没有停用的网站。',
+  optionsExcludedSiteRemoveFailed: '无法在 {rp} 上重新启用 Fenko Vault。',
 
   popupCopyDetails: '复制详情',
   popupCopyWarnTitle: '复制通行密钥详情？',
@@ -1041,6 +1082,20 @@ const ar: TranslationMap = {
   pageContinue: 'متابعة',
   pageNoPasskeysSite: 'لا توجد مفاتيح مرور لهذا الموقع',
   pageVaultLockedMsg: 'افتح قفل Fenko Vault من شريط الأدوات لتسجيل الدخول بمفتاح مرور من الخزنة.',
+  pageUseOtherPasskey: 'استخدام مفتاح مرور آخر',
+  pageUseAnotherDevice: 'استخدام جهاز آخر',
+  pageSiteExcludedTitle: 'Fenko Vault متوقف على {rp}',
+  pageSiteExcludedMsg:
+    'لن يحفظ مفاتيح المرور أو يعرضها هنا. يمكنك إعادة تشغيله من الإعدادات > الاعتراض.',
+  dialogExcludeSite: 'إيقاف التشغيل على {rp}',
+  dialogExcludeSiteHint:
+    'لن يحفظ Fenko Vault مفاتيح المرور أو يعرضها على {rp}. تبقى مفاتيح المرور المحفوظة كما هي.',
+  dialogExcludeFailed: 'تعذّر حفظ هذا الإعداد. حاول مرة أخرى، أو استخدم جهازًا آخر.',
+  optionsExcludedSites: 'المواقع التي أوقفت فيها Fenko Vault',
+  optionsExcludedSitesDesc:
+    'تم إيقافه من نافذة الخزنة نفسها. إزالة الموقع تعيده إلى وضع الاعتراض المحدد أعلاه.',
+  optionsNoExcludedSites: 'لم توقفه على أي موقع.',
+  optionsExcludedSiteRemoveFailed: 'تعذّرت إعادة تشغيل Fenko Vault على {rp}.',
 
   popupCopyDetails: 'نسخ التفاصيل',
   popupCopyWarnTitle: 'نسخ تفاصيل مفتاح المرور؟',
@@ -1279,6 +1334,21 @@ const fa: TranslationMap = {
   pageNoPasskeysSite: 'برای این سایت کلید عبوری پیدا نشد',
   pageVaultLockedMsg: 'برای ورود با کلید عبور گاوصندوق، قفل Fenko Vault را از نوار ابزار باز کنید.',
   pageContinue: 'ادامه',
+  pageUseOtherPasskey: 'استفاده از کلید عبور دیگر',
+  pageUseAnotherDevice: 'استفاده از دستگاه دیگر',
+  pageSiteExcludedTitle: 'Fenko Vault برای {rp} خاموش است',
+  pageSiteExcludedMsg:
+    'اینجا کلید عبور ذخیره یا پیشنهاد نمی‌کند. می‌توانید آن را از تنظیمات > رهگیری دوباره روشن کنید.',
+  dialogExcludeSite: 'خاموش کردن در {rp}',
+  dialogExcludeSiteHint:
+    'Fenko Vault در {rp} کلید عبور ذخیره یا پیشنهاد نمی‌کند. کلیدهای عبور ذخیره‌شده حفظ می‌شوند.',
+  dialogExcludeFailed:
+    'ذخیرهٔ این تنظیم ممکن نشد. دوباره تلاش کنید یا از دستگاه دیگری استفاده کنید.',
+  optionsExcludedSites: 'سایت‌هایی که Fenko Vault در آن‌ها خاموش است',
+  optionsExcludedSitesDesc:
+    'از پنجرهٔ خود گاوصندوق خاموش شده‌اند. با حذف یک سایت، حالت رهگیری بالا دوباره برای آن اعمال می‌شود.',
+  optionsNoExcludedSites: 'هیچ سایتی خاموش نشده است.',
+  optionsExcludedSiteRemoveFailed: 'روشن کردن دوبارهٔ Fenko Vault برای {rp} ممکن نشد.',
 
   popupCopyDetails: 'کپی جزئیات',
   popupCopyWarnTitle: 'جزئیات پس‌کلید کپی شود؟',
@@ -1417,6 +1487,20 @@ const es: TranslationMap = {
   pageNoPasskeysSite: 'No hay passkeys para este sitio',
   pageVaultLockedMsg:
     'Desbloquea Fenko Vault desde la barra de herramientas para iniciar sesión con una passkey de la bóveda.',
+  pageUseOtherPasskey: 'Usar otra passkey',
+  pageUseAnotherDevice: 'Usar otro dispositivo',
+  pageSiteExcludedTitle: 'Fenko Vault está desactivado en {rp}',
+  pageSiteExcludedMsg:
+    'No guardará ni ofrecerá passkeys aquí. Vuelve a activarlo en Configuración > Intercepción.',
+  dialogExcludeSite: 'Desactivar en {rp}',
+  dialogExcludeSiteHint:
+    'Fenko Vault no guardará ni ofrecerá passkeys en {rp}. Las passkeys guardadas se conservan.',
+  dialogExcludeFailed: 'No se pudo guardar el ajuste. Inténtalo de nuevo o usa otro dispositivo.',
+  optionsExcludedSites: 'Sitios donde Fenko Vault está desactivado',
+  optionsExcludedSitesDesc:
+    'Desactivados desde el propio diálogo de la bóveda. Al quitar un sitio, vuelve a aplicarse el modo de intercepción de arriba.',
+  optionsNoExcludedSites: 'No hay sitios desactivados.',
+  optionsExcludedSiteRemoveFailed: 'No se pudo volver a activar Fenko Vault en {rp}.',
 
   popupCopyDetails: 'Copiar detalles',
   popupCopyWarnTitle: '¿Copiar los datos de la clave de acceso?',
@@ -1564,6 +1648,21 @@ const fr: TranslationMap = {
   pageNoPasskeysSite: 'Aucune passkey pour ce site',
   pageVaultLockedMsg:
     'Déverrouillez Fenko Vault depuis la barre d’outils pour vous connecter avec une passkey du coffre.',
+  pageUseOtherPasskey: 'Utiliser une autre passkey',
+  pageUseAnotherDevice: 'Utiliser un autre appareil',
+  pageSiteExcludedTitle: 'Fenko Vault est désactivé sur {rp}',
+  pageSiteExcludedMsg:
+    'Il n’enregistrera ni ne proposera de passkeys ici. Réactivez-le dans Paramètres > Interception.',
+  dialogExcludeSite: 'Désactiver sur {rp}',
+  dialogExcludeSiteHint:
+    'Fenko Vault n’enregistrera ni ne proposera de passkeys sur {rp}. Les passkeys enregistrées sont conservées.',
+  dialogExcludeFailed:
+    'Impossible d’enregistrer ce réglage. Réessayez ou utilisez un autre appareil.',
+  optionsExcludedSites: 'Sites où Fenko Vault est désactivé',
+  optionsExcludedSitesDesc:
+    'Désactivés depuis la boîte de dialogue du coffre. Retirer un site le ramène au mode d’interception ci-dessus.',
+  optionsNoExcludedSites: 'Aucun site désactivé.',
+  optionsExcludedSiteRemoveFailed: 'Impossible de réactiver Fenko Vault sur {rp}.',
 
   popupCopyDetails: 'Copier les détails',
   popupCopyWarnTitle: 'Copier les détails de la clé d’accès ?',
