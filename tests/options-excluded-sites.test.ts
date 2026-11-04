@@ -301,6 +301,38 @@ describe('options: sites where the vault is off', () => {
       expect(document.activeElement).toBe(removeButton('b.example'));
     });
 
+    it('leaves focus where the user moved it while a removal was failing', async () => {
+      await openOptions({ [EXCLUDED_SITES_KEY]: ['a.example'] });
+      chrome.faults.push({
+        op: 'set',
+        times: 1,
+        match: (keys) => keys.includes(EXCLUDED_SITES_KEY),
+      });
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const send = chrome.api.runtime.sendMessage;
+      const answer = jest
+        .spyOn(chrome.api.runtime, 'sendMessage')
+        .mockImplementation(async (message: unknown) => {
+          const response = await send(message);
+          await held;
+          return response;
+        });
+      focusRemove('a.example');
+
+      removeButton('a.example').click();
+      await settle();
+      const other = modeRadio('all');
+      other.focus();
+      release();
+      await settle();
+      answer.mockRestore();
+      chrome.faults.length = 0;
+
+      expect(window.alert).toHaveBeenCalled();
+      expect(document.activeElement).toBe(other);
+    });
+
     it('keeps the focused row when another site changes', async () => {
       await openOptions({ [EXCLUDED_SITES_KEY]: ['a.example', 'b.example'] });
       focusRemove('b.example');

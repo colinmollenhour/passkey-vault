@@ -522,53 +522,70 @@ describe('content script: a site the user turned the vault off for', () => {
     ).not.toContain('PASSKEY_DIALOG_OPEN');
   });
 
-  it('tells a page asking about another site nothing about whether it is turned off', async () => {
-    // A page can name any RP ID and read the reason it gets back.
-    refusedRpIds = ['bank.example', 'shop.example'];
-    excludedSites = ['bank.example'];
-    const ask = (rpId: string) =>
-      request('PASSKEY_GET_REQUEST', { publicKey: { rpId, challenge: 'AQID' } });
+  it.each<[string, Record<string, unknown>, unknown]>([
+    ['turned off from the dialog', { mode: 'all', domains: [] }, ['bank.example']],
+    ['on the block list', { mode: 'blocklist', domains: ['bank.example'] }, undefined],
+    ['off the allow list', { mode: 'allowlist', domains: ['shop.example'] }, undefined],
+  ])(
+    'tells a page asking about another site nothing about whether it is %s',
+    async (_label, rules, excluded) => {
+      // A page can name any RP ID and read the reason it gets back.
+      refusedRpIds = ['bank.example', 'shop.example'];
+      domainRules = rules;
+      excludedSites = excluded;
+      const ask = (rpId: string) =>
+        request('PASSKEY_GET_REQUEST', { publicKey: { rpId, challenge: 'AQID' } });
 
-    const excluded = await ask('bank.example');
-    const notExcluded = await ask('shop.example');
+      const listed = await ask('bank.example');
+      const notListed = await ask('shop.example');
 
-    expect(excluded).toEqual(notExcluded);
-    expect(excluded).toMatchObject({ passthrough: true, error: 'RP ID not valid here' });
-  });
+      expect(listed).toEqual(notListed);
+      expect(listed).toMatchObject({ passthrough: true, error: 'RP ID not valid here' });
+    }
+  );
 
-  it('shows the notice when the background says the site was turned off', () => {
-    const fromBackground = (sender: unknown, rpId: unknown = 'bank.example') => {
+  describe('the notice the background sends once a site is turned off', () => {
+    /** Send it as the background does; returns what this frame answered. */
+    const fromBackground = (sender: unknown, message: Record<string, unknown>) => {
+      const answers: unknown[] = [];
       for (const listener of backgroundListeners) {
-        listener({ type: 'PASSKEY_VAULT_SITE_EXCLUDED', rpId }, sender, () => undefined);
-      }
-    };
-
-    fromBackground({ id: 'another-extension' });
-    fromBackground({ id: chromeMock.runtime.id }, 42);
-    expect(ui.showInfoNotification).not.toHaveBeenCalled();
-
-    fromBackground({ id: chromeMock.runtime.id });
-    expect(ui.showInfoNotification).toHaveBeenCalledTimes(1);
-    expect(ui.showInfoNotification).toHaveBeenCalledWith(
-      'Turned Off Here',
-      expect.stringContaining('passkeys on bank.example.')
-    );
-  });
-
-  it('leaves the notice to the top frame when it runs in an embedded one', () => {
-    const top = jest.spyOn(window, 'top', 'get').mockReturnValue({} as Window);
-    try {
-      for (const listener of backgroundListeners) {
-        listener(
-          { type: 'PASSKEY_VAULT_SITE_EXCLUDED', rpId: 'bank.example' },
-          { id: chromeMock.runtime.id },
-          () => undefined
+        listener({ type: 'PASSKEY_VAULT_SITE_EXCLUDED', ...message }, sender, (answer: unknown) =>
+          answers.push(answer)
         );
       }
+      return answers;
+    };
+    const extension = { id: chromeMock.runtime.id };
+
+    it('is shown by the page that asked, which says so', () => {
+      const answers = fromBackground(extension, {
+        rpId: 'localhost',
+        origin: window.location.origin,
+      });
+
+      expect(answers).toEqual([{ shown: true }]);
+      expect(ui.showInfoNotification).toHaveBeenCalledWith(
+        'Turned Off Here',
+        expect.stringContaining('passkeys on localhost.')
+      );
+    });
+
+    it('is not shown by a page of another site, an embedder or one navigated to', () => {
+      const answers = fromBackground(extension, {
+        rpId: 'bank.example',
+        origin: 'https://bank.example',
+      });
+
+      expect(answers).toEqual([{ shown: false }]);
       expect(ui.showInfoNotification).not.toHaveBeenCalled();
-    } finally {
-      top.mockRestore();
-    }
+    });
+
+    it('is ignored from anyone but the extension, or without a site', () => {
+      fromBackground({ id: 'another-extension' }, { rpId: 'localhost', origin: 'x' });
+      fromBackground(extension, { rpId: 42, origin: window.location.origin });
+
+      expect(ui.showInfoNotification).not.toHaveBeenCalled();
+    });
   });
 
   it('still handles other sites, a parent of an excluded host included', async () => {

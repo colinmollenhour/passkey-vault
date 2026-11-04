@@ -360,7 +360,9 @@ async function removeExcludedSite(site: string, button: HTMLButtonElement): Prom
     button.disabled = false;
     if (removingFocusedSite === site) {
       removingFocusedSite = undefined;
-      button.focus();
+      // Back to the button, unless the user moved on meanwhile.
+      const active = document.activeElement;
+      if (!active || active === document.body || active === button) button.focus();
     }
     alert(t('optionsExcludedSiteRemoveFailed', { rp: site }));
   }

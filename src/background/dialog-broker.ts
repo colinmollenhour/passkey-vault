@@ -475,14 +475,14 @@ export class DialogBroker {
       error: 'The setting could not be saved',
     };
     let marked: string | undefined;
-    let claimed: { id: string; rpId: string; tabId: number } | undefined;
+    let claimed: DialogSession | undefined;
     try {
       claimed = await this.update((sessions) => {
         const session = this.decidable(sessions, token, sender);
         if (!session?.rpId) return undefined;
         marked = session.id;
         this.excluding.add(session.id);
-        return { id: session.id, rpId: session.rpId, tabId: session.tabId };
+        return { ...session };
       });
     } catch (error) {
       // The claim was not saved, and the session is as it was.
@@ -493,7 +493,7 @@ export class DialogBroker {
     if (!claimed) {
       return { success: false, error: 'This request is no longer active' };
     }
-    const { id, rpId, tabId } = claimed;
+    const { id, rpId } = claimed;
 
     try {
       await this.deps.excludeSite(rpId);
@@ -524,31 +524,41 @@ export class DialogBroker {
       if (!gone) return failed;
     }
     // After the window closes, so the notice is not behind it.
+    const requester = claimed;
     void (ended ? this.ended(ended, 'excluded') : Promise.resolve()).then(() =>
-      this.noticeExcluded(tabId, rpId)
+      this.noticeExcluded(requester)
     );
     return { success: true };
   }
 
   /**
-   * Tell the tab's top frame that the vault is now off for `rpId`, so it
-   * says so and where to turn it back on. The top frame, not the requesting
-   * one: a small embedded frame would clip the notice. The background sends
-   * it, not the content script that made the request, because the request
-   * may have ended another way meanwhile (the page gave up, or the user
-   * pressed Escape) while the setting stays saved.
+   * Tell the page that asked that the vault is now off for its RP ID, so
+   * it says so and where to turn it back on. The background sends it, not
+   * the content script that made the request, because the request may
+   * have ended another way meanwhile (the page gave up, or the user pressed
+   * Escape) while the setting stays saved. The top frame first: a small
+   * embedded frame would clip the notice. It shows the notice only if it
+   * is the page that asked or of the same site; otherwise the requesting
+   * frame does.
    */
-  private async noticeExcluded(tabId: number, rpId: string): Promise<void> {
-    try {
-      await chrome.tabs.sendMessage(
-        tabId,
-        { type: DIALOG_MESSAGES.SITE_EXCLUDED, rpId },
-        { frameId: 0 }
-      );
-    } catch {
-      // The tab navigated away or closed, or its top page has no content
-      // script; Settings still lists the site.
-    }
+  private async noticeExcluded(session: DialogSession): Promise<void> {
+    const message = {
+      type: DIALOG_MESSAGES.SITE_EXCLUDED,
+      rpId: session.rpId,
+      origin: session.requester.split(':').slice(2).join(':'),
+    };
+    const shown = async (frameId: number) => {
+      try {
+        const response = (await chrome.tabs.sendMessage(session.tabId, message, { frameId })) as
+          | { shown?: boolean }
+          | undefined;
+        return response?.shown === true;
+      } catch {
+        // The frame navigated away or closed, or has no content script.
+        return false;
+      }
+    };
+    if (!(await shown(0)) && session.frameId !== 0) await shown(session.frameId);
   }
 
   /**

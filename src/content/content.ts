@@ -241,18 +241,20 @@ class ContentScript {
    * browser (null when it handles it).
    *
    * SECURITY: the page names the RP ID, any RP ID, and reads the reason.
-   * So the sites the user turned off are checked only after the RP ID
-   * check: a page asking about another site's RP ID gets "not valid here"
-   * whether or not that site is turned off, and the same round trip to the
-   * background either way. Checked first, the answer would tell the page
-   * which sites the user turned the vault off for.
+   * So the user's site lists (the allow or block list, and the sites
+   * turned off from the dialog) are checked only after the RP ID check: a
+   * page asking about another site's RP ID gets "not valid here", and the
+   * same round trip to the background, whatever the lists say about that
+   * site. Checked first, the answer would tell the page what is on them.
    */
   private async interception(rpId: string): Promise<{ rules: DomainRules; skip: string | null }> {
     const { rules, excluded } = await loadInterceptionSettings();
     let skip: string | null = null;
-    if (!modeIntercepts(rpId, rules)) skip = 'Domain not intercepted';
+    if (rules.mode === 'disabled') skip = 'Domain not intercepted';
     else if (!(await this.mayUseRpId(rpId))) skip = 'RP ID not valid here';
-    else if (isExcludedSite(rpId, excluded)) skip = 'Domain not intercepted';
+    else if (!modeIntercepts(rpId, rules) || isExcludedSite(rpId, excluded)) {
+      skip = 'Domain not intercepted';
+    }
     return { rules, skip };
   }
 
@@ -659,10 +661,15 @@ class ContentScript {
    */
   private setupBackgroundCommunication(): void {
     // Listen for messages from background script
-    // Nothing here answers, so the channel is not held open: a sender that
-    // waits for a reply would otherwise wait until the page unloads.
-    chrome.runtime.onMessage.addListener((message, sender) => {
+    // Answers come back synchronously, so the channel is never held open: a
+    // sender that waits for a reply would otherwise wait until the page
+    // unloads.
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (sender?.id !== chrome.runtime.id) return;
+      if (message?.type === DIALOG_MESSAGES.SITE_EXCLUDED) {
+        sendResponse({ shown: this.siteExcludedNotice(message.rpId, message.origin) });
+        return;
+      }
       this.handleBackgroundMessage(message);
     });
   }
@@ -670,14 +677,11 @@ class ContentScript {
   /**
    * Handle messages from background script
    */
-  private handleBackgroundMessage(message: { type: string; rpId?: unknown }): void {
+  private handleBackgroundMessage(message: { type: string }): void {
     try {
       switch (message.type) {
         case 'UI_ACTIVATION':
           this.showEmergencyUI();
-          break;
-        case DIALOG_MESSAGES.SITE_EXCLUDED:
-          this.siteExcludedNotice(message.rpId);
           break;
         case 'WEB_AUTHN_RESPONSE':
           // Handle WebAuthn responses
@@ -888,14 +892,21 @@ class ContentScript {
   }
 
   /**
-   * Say the vault is off for `rpId` and where to turn it back on. Only in
-   * the top frame, which the background sends it to: an embedded frame may
-   * be too small to show it. The notice is text only: it is page DOM, where
-   * a control would be one the page could click.
+   * Say the vault is off for `rpId` and where to turn it back on, if this
+   * page is the one that asked or a page of the same site. The background
+   * sends it to the top frame first, since an embedded frame may be too
+   * small to show it, then to the requesting frame if the top page is
+   * another site's: an embedder, or a page the tab navigated to meanwhile,
+   * learns nothing. The notice is text only: it is page DOM, where a
+   * control would be one the page could click.
    */
-  private siteExcludedNotice(rpId: unknown): void {
-    if (window.top !== window || typeof rpId !== 'string' || !rpId) return;
+  private siteExcludedNotice(rpId: unknown, origin: unknown): boolean {
+    if (typeof rpId !== 'string' || !rpId || typeof origin !== 'string') return false;
+    const host = window.location.hostname;
+    const ours = window.location.origin === origin || host === rpId || host.endsWith(`.${rpId}`);
+    if (!ours) return false;
     _showInfoNotification(t('pageSiteExcludedTitle'), t('pageSiteExcludedMsg', { rp: rpId }));
+    return true;
   }
 
   private postPassthroughResponse(type: string, requestId: string, reason: string): void {

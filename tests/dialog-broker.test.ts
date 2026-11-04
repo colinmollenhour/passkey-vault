@@ -446,7 +446,11 @@ describe('turning the vault off for a site', () => {
       {
         tabId: 7,
         frameId: 0,
-        message: { type: 'PASSKEY_VAULT_SITE_EXCLUDED', rpId: 'bank.example' },
+        message: {
+          type: 'PASSKEY_VAULT_SITE_EXCLUDED',
+          rpId: 'bank.example',
+          origin: 'https://bank.example',
+        },
       },
     ]);
     const sent = vault.chrome.sentToTabs.map((entry) => entry.message.type);
@@ -455,7 +459,7 @@ describe('turning the vault off for a site', () => {
     );
   });
 
-  it('shows the notice in the top frame for a request from an embedded one', async () => {
+  it('shows the notice in the top frame for an embedded frame of the same site', async () => {
     const embedded = { ...PAGE, frameId: 3, url: 'https://bank.example/embed' };
     const { token } = await open('req-1', createPayload() as any, embedded);
     await attach(token);
@@ -465,6 +469,28 @@ describe('turning the vault off for a site', () => {
 
     expect(results().map((sent) => sent.frameId)).toEqual([3]);
     expect(notices().map((sent) => sent.frameId)).toEqual([0]);
+  });
+
+  it('leaves the notice to the embedded frame when the top page is another site', async () => {
+    // A widget of pay.example in a page of bank.example (this test's page).
+    const widget = {
+      ...PAGE,
+      frameId: 3,
+      url: 'https://pay.example/widget',
+      origin: 'https://pay.example',
+    };
+    const payload = createPayload();
+    payload.publicKey.rp = { name: 'Pay', id: 'pay.example' };
+    const { token } = await open('req-1', payload as any, widget);
+    await attach(token);
+
+    await decide(token, { action: 'exclude-site' });
+    for (let i = 0; i < 5 && notices().length < 2; i++) await vault.settle();
+
+    expect(notices().map((sent) => [sent.frameId, sent.message.origin])).toEqual([
+      [0, 'https://pay.example'],
+      [3, 'https://pay.example'],
+    ]);
   });
 
   it('shows no notice when the setting was not saved', async () => {

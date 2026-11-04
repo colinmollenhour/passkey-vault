@@ -824,7 +824,12 @@ describe('the vault’s dialog hands a request to the browser', () => {
     expect(firstResult.ok).toBe(true);
     expect(aaguidOf(firstResult.json)).not.toBe(VAULT_AAGUID);
     expect(await excludedSites()).toEqual(['off.test']);
-    const notice = await renderedText(page);
+    // The background sends the notice once the dialog has ended.
+    let notice = '';
+    for (let i = 0; i < 40 && !notice.includes('Turned Off Here'); i++) {
+      notice = await renderedText(page);
+      if (!notice.includes('Turned Off Here')) await page.waitForTimeout(50);
+    }
     expect(notice).toContain('Turned Off Here');
     expect(notice).toContain("Fenko Vault won't save or offer passkeys on off.test.");
 
