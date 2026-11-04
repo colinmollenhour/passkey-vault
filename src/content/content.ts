@@ -10,8 +10,14 @@ import { logger } from '../utils/logger';
 import { readPageIcon } from '../site-icons/page-capture';
 import { describeFrame } from './frame';
 import { acceptsEs256 } from '../utils/algorithms';
-import { loadInterceptionSettings, shouldIntercept } from '../utils/domain-rules';
+import {
+  isExcludedSite,
+  loadInterceptionSettings,
+  modeIntercepts,
+  type DomainRules,
+} from '../utils/domain-rules';
 import { VaultDialogClient } from './vault-dialog-client';
+import { DIALOG_MESSAGES } from '../utils/vault-dialog';
 import {
   showErrorNotification as _showErrorNotification,
   showInfoNotification as _showInfoNotification,
@@ -231,6 +237,26 @@ class ContentScript {
   }
 
   /**
+   * The domain rules, and why the vault leaves a request for `rpId` to the
+   * browser (null when it handles it).
+   *
+   * SECURITY: the page names the RP ID, any RP ID, and reads the reason.
+   * So the sites the user turned off are checked only after the RP ID
+   * check: a page asking about another site's RP ID gets "not valid here"
+   * whether or not that site is turned off, and the same round trip to the
+   * background either way. Checked first, the answer would tell the page
+   * which sites the user turned the vault off for.
+   */
+  private async interception(rpId: string): Promise<{ rules: DomainRules; skip: string | null }> {
+    const { rules, excluded } = await loadInterceptionSettings();
+    let skip: string | null = null;
+    if (!modeIntercepts(rpId, rules)) skip = 'Domain not intercepted';
+    else if (!(await this.mayUseRpId(rpId))) skip = 'RP ID not valid here';
+    else if (isExcludedSite(rpId, excluded)) skip = 'Domain not intercepted';
+    return { rules, skip };
+  }
+
+  /**
    * Handle messages from the page script.
    *
    * The page cancels a request when it times out or the site aborts it.
@@ -288,22 +314,9 @@ class ContentScript {
           return;
         }
         const rpId = resolved.rpId;
-        const { rules, excluded } = await loadInterceptionSettings();
-
-        if (!shouldIntercept(rpId, rules, excluded)) {
-          this.postPassthroughResponse(
-            'PASSKEY_CREATE_RESPONSE',
-            requestId,
-            'Domain not intercepted'
-          );
-          return;
-        }
-        if (!(await this.mayUseRpId(rpId))) {
-          this.postPassthroughResponse(
-            'PASSKEY_CREATE_RESPONSE',
-            requestId,
-            'RP ID not valid here'
-          );
+        const { skip } = await this.interception(rpId);
+        if (skip) {
+          this.postPassthroughResponse('PASSKEY_CREATE_RESPONSE', requestId, skip);
           return;
         }
 
@@ -351,7 +364,7 @@ class ContentScript {
             );
             return;
           case 'excluded':
-            this.siteExcluded('PASSKEY_CREATE_RESPONSE', requestId, rpId);
+            this.siteExcluded('PASSKEY_CREATE_RESPONSE', requestId);
             return;
           // The client never returns "escalated" (it keeps waiting for the
           // window); were it to, it would be a cancel.
@@ -462,14 +475,9 @@ class ContentScript {
           return;
         }
         const rpId = resolved.rpId;
-        const { rules, excluded } = await loadInterceptionSettings();
-
-        if (!shouldIntercept(rpId, rules, excluded)) {
-          this.postPassthroughResponse('PASSKEY_GET_RESPONSE', requestId, 'Domain not intercepted');
-          return;
-        }
-        if (!(await this.mayUseRpId(rpId))) {
-          this.postPassthroughResponse('PASSKEY_GET_RESPONSE', requestId, 'RP ID not valid here');
+        const { rules, skip } = await this.interception(rpId);
+        if (skip) {
+          this.postPassthroughResponse('PASSKEY_GET_RESPONSE', requestId, skip);
           return;
         }
 
@@ -532,7 +540,7 @@ class ContentScript {
             );
             return;
           case 'excluded':
-            this.siteExcluded('PASSKEY_GET_RESPONSE', requestId, rpId);
+            this.siteExcluded('PASSKEY_GET_RESPONSE', requestId);
             return;
           // The client never returns "escalated" (it keeps waiting for the
           // window); were it to, it would be a cancel.
@@ -653,7 +661,8 @@ class ContentScript {
     // Listen for messages from background script
     // Nothing here answers, so the channel is not held open: a sender that
     // waits for a reply would otherwise wait until the page unloads.
-    chrome.runtime.onMessage.addListener((message) => {
+    chrome.runtime.onMessage.addListener((message, sender) => {
+      if (sender?.id !== chrome.runtime.id) return;
       this.handleBackgroundMessage(message);
     });
   }
@@ -661,11 +670,14 @@ class ContentScript {
   /**
    * Handle messages from background script
    */
-  private handleBackgroundMessage(message: { type: string }): void {
+  private handleBackgroundMessage(message: { type: string; rpId?: unknown }): void {
     try {
       switch (message.type) {
         case 'UI_ACTIVATION':
           this.showEmergencyUI();
+          break;
+        case DIALOG_MESSAGES.SITE_EXCLUDED:
+          this.siteExcludedNotice(message.rpId);
           break;
         case 'WEB_AUTHN_RESPONSE':
           // Handle WebAuthn responses
@@ -867,13 +879,23 @@ class ContentScript {
 
   /**
    * The user turned the vault off for this site in its dialog; the
-   * background has saved that. Say so, and hand this request to the
-   * browser like every later one for the site. The notice is text only: it
-   * is page DOM, where a control would be one the page could click.
+   * background has saved that. Hand this request to the browser like every
+   * later one for the site. The background tells the top frame to show the
+   * notice (siteExcludedNotice), whichever way this request ends.
    */
-  private siteExcluded(type: string, requestId: string, rpId: string): void {
-    _showInfoNotification(t('pageSiteExcludedTitle'), t('pageSiteExcludedMsg', { rp: rpId }));
+  private siteExcluded(type: string, requestId: string): void {
     this.postPassthroughResponse(type, requestId, 'Site excluded');
+  }
+
+  /**
+   * Say the vault is off for `rpId` and where to turn it back on. Only in
+   * the top frame, which the background sends it to: an embedded frame may
+   * be too small to show it. The notice is text only: it is page DOM, where
+   * a control would be one the page could click.
+   */
+  private siteExcludedNotice(rpId: unknown): void {
+    if (window.top !== window || typeof rpId !== 'string' || !rpId) return;
+    _showInfoNotification(t('pageSiteExcludedTitle'), t('pageSiteExcludedMsg', { rp: rpId }));
   }
 
   private postPassthroughResponse(type: string, requestId: string, reason: string): void {

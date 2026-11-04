@@ -160,9 +160,11 @@ async function loadInterceptionSettings(): Promise<void> {
   ) as HTMLInputElement | null;
   if (passthroughToggle) {
     passthroughToggle.addEventListener('change', async () => {
+      // Read before the await: a storage change can re-render the checkbox.
+      const enabled = passthroughToggle.checked;
       const current = await chrome.storage.local.get(DOMAIN_RULES_KEY);
       const updated = normalizeDomainRules(current[DOMAIN_RULES_KEY]);
-      updated.passthroughOnNoPasskey = passthroughToggle.checked;
+      updated.passthroughOnNoPasskey = enabled;
       await chrome.storage.local.set({ [DOMAIN_RULES_KEY]: updated });
     });
   }
@@ -290,6 +292,21 @@ function renderExcludedSites(sites: string[]): void {
   const empty = document.getElementById('excluded-sites-empty');
   if (!list || !empty) return;
 
+  // Rebuilding the rows drops the focused one, so keep the place of a
+  // keyboard user: the same row if it is still listed, else the row that
+  // took its place, else the empty hint.
+  const shown = [...list.querySelectorAll<HTMLButtonElement>('button[data-site]')].map(
+    (button) => button.dataset.site!
+  );
+  const active = document.activeElement;
+  const focusedSite =
+    active instanceof HTMLButtonElement && list.contains(active)
+      ? active.dataset.site
+      : !active || active === document.body
+        ? removingFocusedSite
+        : undefined;
+  removingFocusedSite = undefined;
+
   empty.style.display = sites.length === 0 ? 'block' : 'none';
   list.innerHTML = sites
     .map(
@@ -305,10 +322,25 @@ function renderExcludedSites(sites: string[]): void {
     )
     .join('');
 
-  list.querySelectorAll<HTMLButtonElement>('button[data-site]').forEach((button) => {
+  const buttons = [...list.querySelectorAll<HTMLButtonElement>('button[data-site]')];
+  buttons.forEach((button) => {
     button.addEventListener('click', () => removeExcludedSite(button.dataset.site!, button));
   });
+
+  if (focusedSite === undefined) return;
+  const same = buttons.find((button) => button.dataset.site === focusedSite);
+  const next = buttons[Math.min(Math.max(shown.indexOf(focusedSite), 0), buttons.length - 1)];
+  const target = same ?? next ?? empty;
+  if (target === empty) empty.tabIndex = -1;
+  target.focus();
 }
+
+/**
+ * The site whose focused Remove button was pressed. Disabling the button
+ * while the removal runs takes focus from it, so the list re-rendered
+ * after the removal reads the user's place from here.
+ */
+let removingFocusedSite: string | undefined;
 
 /**
  * Return a site to the interception mode. The background writes the list,
@@ -316,6 +348,7 @@ function renderExcludedSites(sites: string[]): void {
  * can be older than a change that reached this page first.
  */
 async function removeExcludedSite(site: string, button: HTMLButtonElement): Promise<void> {
+  if (document.activeElement === button) removingFocusedSite = site;
   button.disabled = true;
   let response: Record<string, unknown> | undefined;
   try {
@@ -325,6 +358,10 @@ async function removeExcludedSite(site: string, button: HTMLButtonElement): Prom
   }
   if (!response?.success) {
     button.disabled = false;
+    if (removingFocusedSite === site) {
+      removingFocusedSite = undefined;
+      button.focus();
+    }
     alert(t('optionsExcludedSiteRemoveFailed', { rp: site }));
   }
 }

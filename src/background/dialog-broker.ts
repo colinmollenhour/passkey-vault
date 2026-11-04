@@ -475,14 +475,14 @@ export class DialogBroker {
       error: 'The setting could not be saved',
     };
     let marked: string | undefined;
-    let claimed: { id: string; rpId: string } | undefined;
+    let claimed: { id: string; rpId: string; tabId: number } | undefined;
     try {
       claimed = await this.update((sessions) => {
         const session = this.decidable(sessions, token, sender);
         if (!session?.rpId) return undefined;
         marked = session.id;
         this.excluding.add(session.id);
-        return { id: session.id, rpId: session.rpId };
+        return { id: session.id, rpId: session.rpId, tabId: session.tabId };
       });
     } catch (error) {
       // The claim was not saved, and the session is as it was.
@@ -493,7 +493,7 @@ export class DialogBroker {
     if (!claimed) {
       return { success: false, error: 'This request is no longer active' };
     }
-    const { id, rpId } = claimed;
+    const { id, rpId, tabId } = claimed;
 
     try {
       await this.deps.excludeSite(rpId);
@@ -521,10 +521,34 @@ export class DialogBroker {
     } catch (error) {
       this.excluding.delete(id);
       console.warn('Could not end the dialog after excluding the site', error);
-      return gone ? { success: true } : failed;
+      if (!gone) return failed;
     }
-    if (ended) void this.ended(ended, 'excluded');
+    // After the window closes, so the notice is not behind it.
+    void (ended ? this.ended(ended, 'excluded') : Promise.resolve()).then(() =>
+      this.noticeExcluded(tabId, rpId)
+    );
     return { success: true };
+  }
+
+  /**
+   * Tell the tab's top frame that the vault is now off for `rpId`, so it
+   * says so and where to turn it back on. The top frame, not the requesting
+   * one: a small embedded frame would clip the notice. The background sends
+   * it, not the content script that made the request, because the request
+   * may have ended another way meanwhile (the page gave up, or the user
+   * pressed Escape) while the setting stays saved.
+   */
+  private async noticeExcluded(tabId: number, rpId: string): Promise<void> {
+    try {
+      await chrome.tabs.sendMessage(
+        tabId,
+        { type: DIALOG_MESSAGES.SITE_EXCLUDED, rpId },
+        { frameId: 0 }
+      );
+    } catch {
+      // The tab navigated away or closed, or its top page has no content
+      // script; Settings still lists the site.
+    }
   }
 
   /**

@@ -214,6 +214,115 @@ describe('options: sites where the vault is off', () => {
     ).toBe(false);
   });
 
+  it('saves the fallback choice the user clicked, even if a change re-renders it meanwhile', async () => {
+    await openOptions({ [DOMAIN_RULES_KEY]: { mode: 'all', domains: [] } });
+    const toggle = document.getElementById('passthrough-missing-toggle') as HTMLInputElement;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const local = chrome.api.storage.local;
+    const get = local.get.bind(local);
+    const reading = jest.spyOn(local, 'get').mockImplementation(async (keys: unknown) => {
+      const result = await get(keys as never);
+      await held;
+      return result;
+    });
+
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event('change'));
+    await settle();
+    // Another Settings page changes the rules while this one reads them.
+    const elsewhere = { mode: 'blocklist', domains: ['a.example'], passthroughOnNoPasskey: true };
+    for (const listener of pageListeners) {
+      listener({ [DOMAIN_RULES_KEY]: { newValue: elsewhere } }, 'local');
+    }
+    expect(toggle.checked).toBe(true);
+    release();
+    await settle();
+    reading.mockRestore();
+
+    expect(chrome.local.data[DOMAIN_RULES_KEY]).toMatchObject({ passthroughOnNoPasskey: false });
+  });
+
+  describe('keeping a keyboard user’s place', () => {
+    const focusRemove = (site: string) => {
+      removeButton(site).focus();
+      expect(document.activeElement).toBe(removeButton(site));
+    };
+
+    it('moves focus to the row that took the removed one’s place', async () => {
+      await openOptions({ [EXCLUDED_SITES_KEY]: ['a.example', 'b.example', 'c.example'] });
+      focusRemove('a.example');
+
+      removeButton('a.example').click();
+      await settle();
+
+      expect(listed()).toEqual(['b.example', 'c.example']);
+      expect(document.activeElement).toBe(removeButton('b.example'));
+    });
+
+    it('moves focus to the row above when the last one goes', async () => {
+      await openOptions({ [EXCLUDED_SITES_KEY]: ['a.example', 'b.example'] });
+      focusRemove('b.example');
+
+      removeButton('b.example').click();
+      await settle();
+
+      expect(document.activeElement).toBe(removeButton('a.example'));
+    });
+
+    it('moves focus to the empty hint when the list empties', async () => {
+      await openOptions({ [EXCLUDED_SITES_KEY]: ['a.example'] });
+      focusRemove('a.example');
+
+      removeButton('a.example').click();
+      await settle();
+
+      expect(document.activeElement).toBe(empty());
+    });
+
+    it('keeps the place when disabling the button took focus from it', async () => {
+      // Browsers move focus off a button that becomes disabled.
+      await openOptions({ [EXCLUDED_SITES_KEY]: ['a.example', 'b.example'] });
+      focusRemove('a.example');
+      const button = removeButton('a.example');
+      const disabled = Object.getOwnPropertyDescriptor(HTMLButtonElement.prototype, 'disabled')!;
+      Object.defineProperty(button, 'disabled', {
+        configurable: true,
+        get: () => disabled.get!.call(button),
+        set: (value: boolean) => {
+          disabled.set!.call(button, value);
+          if (value) button.blur();
+        },
+      });
+
+      button.click();
+      await settle();
+
+      expect(document.activeElement).toBe(removeButton('b.example'));
+    });
+
+    it('keeps the focused row when another site changes', async () => {
+      await openOptions({ [EXCLUDED_SITES_KEY]: ['a.example', 'b.example'] });
+      focusRemove('b.example');
+
+      await new ExcludedSites().add('c.example');
+      await settle();
+
+      expect(document.activeElement).toBe(removeButton('b.example'));
+    });
+
+    it('leaves focus alone when it is elsewhere on the page', async () => {
+      await openOptions({ [EXCLUDED_SITES_KEY]: ['a.example'] });
+      const other = modeRadio('all');
+      other.focus();
+
+      await new ExcludedSites().add('c.example');
+      await settle();
+
+      expect(document.activeElement).toBe(other);
+    });
+  });
+
   it('shows a stored site as text, not markup', async () => {
     await openOptions({ [EXCLUDED_SITES_KEY]: ['<img src=x onerror=alert(1)>'] });
 

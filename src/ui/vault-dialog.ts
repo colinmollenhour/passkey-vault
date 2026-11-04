@@ -89,6 +89,8 @@ export class VaultDialog {
   private gate: ConsentGate | null = null;
   private settled = false;
   private selectedId: string | null = null;
+  /** The RP ID the dialog is for, as the background bound it. */
+  private rpId = '';
   private readonly consentButtons: HTMLButtonElement[] = [];
   private mode: VaultDialogMode = 'frame';
   private unverifiedTimer: ReturnType<typeof setTimeout> | null = null;
@@ -124,6 +126,7 @@ export class VaultDialog {
     const list = this.el('passkeys');
     footer.textContent = '';
     list.textContent = '';
+    this.rpId = view.rpId;
 
     if (view.kind === 'get') {
       this.el('title').textContent = t('pageChoosePasskey');
@@ -464,6 +467,7 @@ export class VaultDialog {
     this.updateConsentButtons();
     this.gate?.dispose();
     let response: { success?: boolean; code?: unknown } | undefined;
+    let unanswered = false;
     try {
       response = (await this.env.send({
         type: DIALOG_MESSAGES.DECIDE,
@@ -472,9 +476,13 @@ export class VaultDialog {
       })) as { success?: boolean; code?: unknown } | undefined;
     } catch {
       response = undefined;
+      unanswered = true;
     }
     if (!response?.success) {
-      if (decision.action === 'exclude-site' && response?.code === EXCLUDE_FAILED) {
+      // No answer at all means the worker stopped while saving, which
+      // leaves the session pending: decidable again, not gone. A retry
+      // that finds it gone gets "no longer active" then.
+      if (decision.action === 'exclude-site' && (unanswered || response?.code === EXCLUDE_FAILED)) {
         this.showExcludeFailed();
         return;
       }
@@ -486,19 +494,22 @@ export class VaultDialog {
   }
 
   /**
-   * The exclusion was not saved, and the request is still open: say so
+   * The exclusion did not finish, and the request is still open: say so
    * and let the user decide again. The status row is the window offer's,
-   * so the error takes the message's place: the header keeps its height
-   * and the body its row, which still names the account and the site.
-   * The message is the dialog's description, so that is the error now.
-   * Consent starts over: the gate waits again before any consent click
-   * counts.
+   * so the error takes the message's place: the header keeps its height.
+   * The message named the site, and on the sign-in picker nothing else
+   * names it in full, so the error names it too: consent starts over on a
+   * dialog that still says which site it is for. The gate waits again
+   * before any consent click counts. The error says turning off failed,
+   * not that nothing was saved: the site may be saved while ending the
+   * request failed, and a retry saves it again harmlessly. It must fit the
+   * message's two lines, a long RP ID included, or the gate cannot open.
    */
   private showExcludeFailed(): void {
     const error = this.doc.createElement('span');
     error.className = 'card-error';
     error.setAttribute('role', 'alert');
-    error.textContent = t('dialogExcludeFailed');
+    error.textContent = t('dialogExcludeFailed', { rp: this.rpId });
     this.el('subtitle').replaceChildren(error);
     this.settled = false;
     this.armGate();

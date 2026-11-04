@@ -595,7 +595,7 @@ const en: TranslationMap = {
   dialogExcludeSite: 'Turn off on {rp}',
   dialogExcludeSiteHint:
     "Fenko Vault won't save or offer passkeys on {rp}. Saved passkeys are kept.",
-  dialogExcludeFailed: "Couldn't save that setting. Try again, or use another device.",
+  dialogExcludeFailed: "Couldn't turn off on {rp}.",
 };
 
 const ru: TranslationMap = {
@@ -782,8 +782,7 @@ const ru: TranslationMap = {
   dialogExcludeSite: 'Отключить на {rp}',
   dialogExcludeSiteHint:
     'Fenko Vault не будет сохранять и предлагать passkeys на {rp}. Сохранённые passkeys останутся.',
-  dialogExcludeFailed:
-    'Не удалось сохранить настройку. Попробуйте ещё раз или используйте другое устройство.',
+  dialogExcludeFailed: 'Не удалось отключить на {rp}.',
   optionsExcludedSites: 'Сайты, где Fenko Vault отключён',
   optionsExcludedSitesDesc:
     'Отключены в диалоге самого хранилища. Удалённый из списка сайт снова следует режиму перехвата выше.',
@@ -936,7 +935,7 @@ const zh_CN: TranslationMap = {
   dialogExcludeSite: '在 {rp} 上停用',
   dialogExcludeSiteHint:
     'Fenko Vault 将不再在 {rp} 上保存或提供 passkey。已保存的 passkey 会保留。',
-  dialogExcludeFailed: '无法保存该设置。请重试，或使用其他设备。',
+  dialogExcludeFailed: '未能在 {rp} 上停用。',
   optionsExcludedSites: '已停用 Fenko Vault 的网站',
   optionsExcludedSitesDesc:
     '这些网站是在保险库自己的对话框中停用的。移除网站后，它将重新遵循上方的拦截模式。',
@@ -1091,7 +1090,7 @@ const ar: TranslationMap = {
   dialogExcludeSite: 'إيقاف التشغيل على {rp}',
   dialogExcludeSiteHint:
     'لن يحفظ Fenko Vault مفاتيح المرور أو يعرضها على {rp}. تبقى مفاتيح المرور المحفوظة كما هي.',
-  dialogExcludeFailed: 'تعذّر حفظ هذا الإعداد. حاول مرة أخرى، أو استخدم جهازًا آخر.',
+  dialogExcludeFailed: 'تعذّر إيقاف التشغيل على {rp}.',
   optionsExcludedSites: 'المواقع التي أوقفت فيها Fenko Vault',
   optionsExcludedSitesDesc:
     'تم إيقافه من نافذة الخزنة نفسها. إزالة الموقع تعيده إلى وضع الاعتراض المحدد أعلاه.',
@@ -1343,8 +1342,7 @@ const fa: TranslationMap = {
   dialogExcludeSite: 'خاموش کردن در {rp}',
   dialogExcludeSiteHint:
     'Fenko Vault در {rp} کلید عبور ذخیره یا پیشنهاد نمی‌کند. کلیدهای عبور ذخیره‌شده حفظ می‌شوند.',
-  dialogExcludeFailed:
-    'ذخیرهٔ این تنظیم ممکن نشد. دوباره تلاش کنید یا از دستگاه دیگری استفاده کنید.',
+  dialogExcludeFailed: 'خاموش کردن در {rp} ممکن نشد.',
   optionsExcludedSites: 'سایت‌هایی که Fenko Vault در آن‌ها خاموش است',
   optionsExcludedSitesDesc:
     'از پنجرهٔ خود گاوصندوق خاموش شده‌اند. با حذف یک سایت، حالت رهگیری بالا دوباره برای آن اعمال می‌شود.',
@@ -1496,7 +1494,7 @@ const es: TranslationMap = {
   dialogExcludeSite: 'Desactivar en {rp}',
   dialogExcludeSiteHint:
     'Fenko Vault no guardará ni ofrecerá passkeys en {rp}. Las passkeys guardadas se conservan.',
-  dialogExcludeFailed: 'No se pudo guardar el ajuste. Inténtalo de nuevo o usa otro dispositivo.',
+  dialogExcludeFailed: 'No se pudo desactivar en {rp}.',
   optionsExcludedSites: 'Sitios donde Fenko Vault está desactivado',
   optionsExcludedSitesDesc:
     'Desactivados desde el propio diálogo de la bóveda. Al quitar un sitio, vuelve a aplicarse el modo de intercepción de arriba.',
@@ -1657,8 +1655,7 @@ const fr: TranslationMap = {
   dialogExcludeSite: 'Désactiver sur {rp}',
   dialogExcludeSiteHint:
     'Fenko Vault n’enregistrera ni ne proposera de passkeys sur {rp}. Les passkeys enregistrées sont conservées.',
-  dialogExcludeFailed:
-    'Impossible d’enregistrer ce réglage. Réessayez ou utilisez un autre appareil.',
+  dialogExcludeFailed: 'Impossible de désactiver sur {rp}.',
   optionsExcludedSites: 'Sites où Fenko Vault est désactivé',
   optionsExcludedSitesDesc:
     'Désactivés depuis la boîte de dialogue du coffre. Retirer un site le ramène au mode d’interception ci-dessus.',

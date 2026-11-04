@@ -54,19 +54,28 @@ export function normalizeRpId(rpId: string): string {
 /** Stored (or missing) exclusions: distinct, non-empty, normalized RP IDs. */
 export function normalizeExcludedSites(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
-  const sites: string[] = [];
+  const sites = new Set<string>();
   for (const entry of raw) {
     if (typeof entry !== 'string') continue;
     const site = normalizeRpId(entry);
-    if (site && !sites.includes(site)) sites.push(site);
+    if (site) sites.add(site);
   }
-  return sites;
+  return [...sites];
+}
+
+/** Whether the user turned the vault off for `rpId`. */
+export function isExcludedSite(rpId: string, excluded: string[]): boolean {
+  return excluded.includes(normalizeRpId(rpId));
 }
 
 /** Whether the vault handles a request for `rpId`. */
 export function shouldIntercept(rpId: string, rules: DomainRules, excluded: string[]): boolean {
+  return !isExcludedSite(rpId, excluded) && modeIntercepts(rpId, rules);
+}
+
+/** Whether the interception mode alone says the vault handles `rpId`. */
+export function modeIntercepts(rpId: string, rules: DomainRules): boolean {
   const domain = normalizeRpId(rpId);
-  if (excluded.includes(domain)) return false;
   if (rules.mode === 'disabled') return false;
   if (rules.mode === 'all') return true;
 

@@ -432,6 +432,52 @@ describe('turning the vault off for a site', () => {
     expect((await decide(token, { action: 'use', id: 'cred-alice' })).success).toBe(false);
   });
 
+  const notices = () =>
+    vault.chrome.sentToTabs.filter((sent) => sent.message.type === 'PASSKEY_VAULT_SITE_EXCLUDED');
+
+  it('tells the top frame to show the notice, after the dialog ended', async () => {
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+
+    await decide(token, { action: 'exclude-site' });
+    await vault.settle();
+
+    expect(notices()).toEqual([
+      {
+        tabId: 7,
+        frameId: 0,
+        message: { type: 'PASSKEY_VAULT_SITE_EXCLUDED', rpId: 'bank.example' },
+      },
+    ]);
+    const sent = vault.chrome.sentToTabs.map((entry) => entry.message.type);
+    expect(sent.indexOf('PASSKEY_DIALOG_RESULT')).toBeLessThan(
+      sent.indexOf('PASSKEY_VAULT_SITE_EXCLUDED')
+    );
+  });
+
+  it('shows the notice in the top frame for a request from an embedded one', async () => {
+    const embedded = { ...PAGE, frameId: 3, url: 'https://bank.example/embed' };
+    const { token } = await open('req-1', createPayload() as any, embedded);
+    await attach(token);
+
+    await decide(token, { action: 'exclude-site' });
+    await vault.settle();
+
+    expect(results().map((sent) => sent.frameId)).toEqual([3]);
+    expect(notices().map((sent) => sent.frameId)).toEqual([0]);
+  });
+
+  it('shows no notice when the setting was not saved', async () => {
+    vault.chrome.faults.push({ op: 'set', match: (keys) => keys.includes('excluded_sites') });
+    const { token } = await open('req-1', createPayload() as any);
+    await attach(token);
+
+    await decide(token, { action: 'exclude-site' });
+    await vault.settle();
+
+    expect(notices()).toEqual([]);
+  });
+
   it('works while the vault is locked', async () => {
     await vault.send({ type: 'SETUP_MASTER_PASSWORD', payload: { password: '123456' } });
     await vault.send({ type: 'LOCK_SECURE_STORAGE' });
@@ -648,6 +694,30 @@ describe('the broker saving an exclusion', () => {
     expect(excludeSite).toHaveBeenCalledTimes(1);
     await flushQueue();
     expect(results().map((sent) => sent.message.outcome)).toEqual(['excluded']);
+  });
+
+  it('still shows the notice when the page gave up while the setting was being saved', async () => {
+    const { broker, write } = brokerWithWrite();
+    const decideFor = await claimed(broker, { rpId: 'bank.example' });
+
+    const first = decideFor({ action: 'exclude-site' });
+    await flushQueue();
+    await broker.cancel({
+      type: 'PASSKEY_DIALOG_CANCEL',
+      requestId: 'req-1',
+      requester: REQUESTER,
+    });
+    write().resolve();
+
+    expect(await first).toEqual({ success: true });
+    await flushQueue();
+    // The request ended with the page, but the site is turned off: say so.
+    expect(results()).toEqual([]);
+    expect(
+      vault.chrome.sentToTabs
+        .filter((sent) => sent.message.type === 'PASSKEY_VAULT_SITE_EXCLUDED')
+        .map((sent) => [sent.frameId, sent.message.rpId])
+    ).toEqual([[0, 'bank.example']]);
   });
 
   it('takes decisions again once a save failed', async () => {

@@ -40,12 +40,17 @@ type BackgroundHandler = (message: { type: string; payload?: unknown }) => unkno
 let background: BackgroundHandler = () => ({ success: true });
 let domainRules: Record<string, unknown> = {};
 let excludedSites: unknown = undefined;
+/** RP IDs the background says this page may not use. */
+let refusedRpIds: string[] = [];
 
 const chromeMock = (window as unknown as { chrome: Record<string, any> }).chrome;
 // The background decides which RP IDs the page may use; these tests are about
 // what happens after it says yes.
-chromeMock.runtime.sendMessage.mockImplementation(async (message: { type: string }) =>
-  message.type === 'CHECK_RP_ID' ? { allowed: true } : background(message)
+chromeMock.runtime.sendMessage.mockImplementation(
+  async (message: { type: string; payload?: { rpId?: string } }) =>
+    message.type === 'CHECK_RP_ID'
+      ? { allowed: !refusedRpIds.includes(message.payload?.rpId ?? '') }
+      : background(message)
 );
 chromeMock.storage.local.get.mockImplementation(async (keys: string | string[]) => {
   const stored: Record<string, unknown> = {
@@ -95,11 +100,11 @@ let backgroundListeners: Array<(...args: unknown[]) => void> = [];
 
 beforeAll(async () => {
   require('../src/content/content');
+  // initialize() awaits i18n and logger set-up before it listens to the page.
+  await flush();
   backgroundListeners = chromeMock.runtime.onMessage.addListener.mock.calls.map(
     ([listener]: [(...args: unknown[]) => void]) => listener
   );
-  // initialize() awaits i18n and logger set-up before it listens to the page.
-  await flush();
 });
 
 /** Tell the content script how a dialog ended, as the background does. */
@@ -119,6 +124,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   domainRules = {};
   excludedSites = undefined;
+  refusedRpIds = [];
   mockFrameDialogs = true;
   mountDialogFrame.mockImplementation(() => {
     let remove!: () => void;
@@ -398,10 +404,8 @@ describe('content script: the vault dialog', () => {
     dialogResult('dialog-2', 'excluded');
 
     expect(await result).toMatchObject({ passthrough: true, error: 'Site excluded' });
-    expect(ui.showInfoNotification).toHaveBeenCalledWith(
-      'Turned Off Here',
-      expect.stringContaining('passkeys on localhost.')
-    );
+    // The background tells the top frame to show the notice.
+    expect(ui.showInfoNotification).not.toHaveBeenCalled();
     expect(sent().map((message) => message.type)).not.toContain('GET_PASSKEY');
   });
 
@@ -467,10 +471,7 @@ describe('content script: the create confirmation', () => {
 
     expect(await result).toMatchObject({ passthrough: true, error: 'Site excluded' });
     expect(sentTypes()).not.toContain('CREATE_PASSKEY');
-    expect(ui.showInfoNotification).toHaveBeenCalledWith(
-      'Turned Off Here',
-      expect.stringContaining('passkeys on localhost.')
-    );
+    expect(ui.showInfoNotification).not.toHaveBeenCalled();
   });
 
   it('still refuses, and keeps the browser out, on Cancel', async () => {
@@ -519,6 +520,55 @@ describe('content script: a site the user turned the vault off for', () => {
     expect(
       chromeMock.runtime.sendMessage.mock.calls.map(([message]: [{ type: string }]) => message.type)
     ).not.toContain('PASSKEY_DIALOG_OPEN');
+  });
+
+  it('tells a page asking about another site nothing about whether it is turned off', async () => {
+    // A page can name any RP ID and read the reason it gets back.
+    refusedRpIds = ['bank.example', 'shop.example'];
+    excludedSites = ['bank.example'];
+    const ask = (rpId: string) =>
+      request('PASSKEY_GET_REQUEST', { publicKey: { rpId, challenge: 'AQID' } });
+
+    const excluded = await ask('bank.example');
+    const notExcluded = await ask('shop.example');
+
+    expect(excluded).toEqual(notExcluded);
+    expect(excluded).toMatchObject({ passthrough: true, error: 'RP ID not valid here' });
+  });
+
+  it('shows the notice when the background says the site was turned off', () => {
+    const fromBackground = (sender: unknown, rpId: unknown = 'bank.example') => {
+      for (const listener of backgroundListeners) {
+        listener({ type: 'PASSKEY_VAULT_SITE_EXCLUDED', rpId }, sender, () => undefined);
+      }
+    };
+
+    fromBackground({ id: 'another-extension' });
+    fromBackground({ id: chromeMock.runtime.id }, 42);
+    expect(ui.showInfoNotification).not.toHaveBeenCalled();
+
+    fromBackground({ id: chromeMock.runtime.id });
+    expect(ui.showInfoNotification).toHaveBeenCalledTimes(1);
+    expect(ui.showInfoNotification).toHaveBeenCalledWith(
+      'Turned Off Here',
+      expect.stringContaining('passkeys on bank.example.')
+    );
+  });
+
+  it('leaves the notice to the top frame when it runs in an embedded one', () => {
+    const top = jest.spyOn(window, 'top', 'get').mockReturnValue({} as Window);
+    try {
+      for (const listener of backgroundListeners) {
+        listener(
+          { type: 'PASSKEY_VAULT_SITE_EXCLUDED', rpId: 'bank.example' },
+          { id: chromeMock.runtime.id },
+          () => undefined
+        );
+      }
+      expect(ui.showInfoNotification).not.toHaveBeenCalled();
+    } finally {
+      top.mockRestore();
+    }
   });
 
   it('still handles other sites, a parent of an excluded host included', async () => {

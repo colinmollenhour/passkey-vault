@@ -441,10 +441,10 @@ describe('turning the vault off for a site', () => {
     trustedClick(byId('pkv-exclude'));
     await flush();
 
-    // The error takes the message's place, so the header keeps its height;
-    // the body's row still names the account and the site.
+    // The error takes the message's place, so the header keeps its height,
+    // and names the site in full as the message did.
     const error = byId('subtitle').querySelector('.card-error')!;
-    expect(error.textContent).toBe("Couldn't save that setting. Try again, or use another device.");
+    expect(error.textContent).toBe("Couldn't turn off on bank.example.");
     expect(error.getAttribute('role')).toBe('alert');
     expect(byId('subtitle').textContent).toBe(error.textContent);
     expect(byId('card').getAttribute('aria-describedby')).toBe('subtitle');
@@ -477,11 +477,46 @@ describe('turning the vault off for a site', () => {
 
     expect(decisions(send)).toHaveLength(2);
     expect(byId('subtitle').querySelectorAll('.card-error')).toHaveLength(1);
-    expect(byId('subtitle').textContent).toBe(
-      "Couldn't save that setting. Try again, or use another device."
-    );
+    // The picker's rows name only accounts: the error keeps the site in view.
+    expect(byId('subtitle').textContent).toBe("Couldn't turn off on bank.example.");
+    expect(byId('subtitle').textContent).not.toContain('another device');
     expect(document.querySelectorAll('.passkey-item')).toHaveLength(2);
     expect(byId('footer').querySelectorAll('button')).toHaveLength(4);
+  });
+
+  it('lets the user choose again when the background never answered', async () => {
+    // The worker stopped while saving: the session is still pending, and
+    // only a new decision can tell whether it is gone.
+    const gate = heldGate();
+    const send = await show(CREATE_VIEW, gate.factory, false, (decision) => {
+      if (decision.action === 'exclude-site') throw new Error('Receiving end does not exist');
+      return { success: true };
+    });
+    gate.set(true);
+    trustedClick(byId('pkv-exclude'));
+    await flush();
+
+    expect(byId('subtitle').querySelector('.card-error')!.textContent).toBe(
+      "Couldn't turn off on bank.example."
+    );
+    expect(gate.created()).toBe(2);
+    trustedClick(byId('pkv-passthrough'));
+    await flush();
+    expect(decisions(send).map((message) => message.decision)).toEqual([
+      { action: 'exclude-site' },
+      { action: 'passthrough' },
+    ]);
+  });
+
+  it('treats a lost answer to any other decision as a request that is gone', async () => {
+    await show(CREATE_VIEW, openGate, false, () => {
+      throw new Error('Receiving end does not exist');
+    });
+
+    trustedClick(byId('pkv-passthrough'));
+    await flush();
+
+    expect(byId('subtitle').textContent).toBe('This request is no longer active.');
   });
 
   it('treats any other refusal as a request that is gone', async () => {
